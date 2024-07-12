@@ -1,1 +1,5 @@
 datasets/
+bin/
+build/
+cmake/
+teste
