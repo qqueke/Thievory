@@ -33,8 +33,10 @@ CC32_Static_Kernel(const uint32 *staticSize, const uint32 *d_staticList,
   //}
 
   // (Row) + (Column) + (Thread Offset)
-  const uint32 tid = blockDim.x * THREADS_PER_BLOCK * blockIdx.y +
-                     blockDim.x * blockIdx.x + threadIdx.x;
+
+  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
+  // const uint32 tid = blockDim.x * THREADS_PER_BLOCK * blockIdx.y +
+  //                    blockDim.x * blockIdx.x + threadIdx.x;
   uint32 warpIdx = tid >> WARP_SHIFT;
   const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
   const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
@@ -48,10 +50,9 @@ CC32_Static_Kernel(const uint32 *staticSize, const uint32 *d_staticList,
     uint32 sourceValue = d_values[vertexId];
 
     const uint64 start = d_offsets[vertexId];
-    const uint64 shiftStart = start & MEM_ALIGN_32;
     const uint64 end = d_offsets[vertexId + 1];
 
-    for (uint64 i = shiftStart + laneIdx; i < end; i += WARP_SIZE) {
+    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
       if (i >= start) {
         uint32 neighborId = d_staticEdges[i];
 
@@ -169,6 +170,213 @@ __global__ void CC64_Demand_Kernel(const uint64 *demandSize,
           atomicMin(&d_values[neighborId], sourceValue);
           d_frontier[neighborId] = 1;
         }
+      }
+    }
+  }
+}
+
+__global__ void CC32_Filter_Kernel(const uint32 *partitionList,
+                                   uint32 *d_partitionsOffsets,
+                                   uint32 *d_values, bool *d_frontier,
+                                   const uint32 *d_filterEdges,
+                                   const uint64 *d_offsets,
+                                   bool *d_filterFrontier) {
+
+  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
+  // const uint32 tid = blockDim.x * THREADS_PER_BLOCK * blockIdx.y +
+  //                    blockDim.x * blockIdx.x + threadIdx.x;
+
+  uint32 warpIdx = tid >> WARP_SHIFT;
+  const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
+  const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
+
+  uint32 partition = partitionList[0];
+  // uint32 touch;
+  //  Start Edge
+  uint32 startEdge = d_offsets[d_partitionsOffsets[partition]];
+
+  // End Edge
+  // uint32 endEdge = d_offsets[d_partitionsOffsets[partition + 1]];
+
+  // uint32 edgeCount = endEdge - startEdge;
+
+  // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
+  // dimension
+  for (warpIdx += d_partitionsOffsets[partition];
+       warpIdx < d_partitionsOffsets[partition + 1]; warpIdx += numWarps) {
+    // Start offset
+    // d_partitionsOffsets[partition]
+
+    // End offset
+    // d_partitionsOffsets[partition + 1]
+
+    if (!d_filterFrontier[warpIdx])
+      continue;
+
+    d_filterFrontier[warpIdx] = 0;
+
+    uint32 sourceValue = d_values[warpIdx];
+
+    const uint64 start = d_offsets[warpIdx] - startEdge;
+    const uint64 end = d_offsets[warpIdx + 1] - startEdge;
+
+    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
+      uint32 neighborId = d_filterEdges[i];
+
+      // If this new path has lower cost than the previous then change and add
+      // the neighbor to the frontier
+      if (sourceValue < d_values[neighborId]) {
+        atomicMin(&d_values[neighborId], sourceValue);
+        d_frontier[neighborId] = 1;
+      }
+    }
+  }
+
+  //  uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
+  //
+  //  uint32 partition = partitionList[0];
+  //  // uint32 touch;
+  //  //  Start Edge
+  //  uint32 startEdge = d_offsets[d_partitionsOffsets[partition]];
+  //
+  //  for (tid += d_partitionsOffsets[partition];
+  //       tid < d_partitionsOffsets[partition + 1];
+  //       tid += blockDim.x * gridDim.x) {
+  //
+  //
+  //    if (!d_filterFrontier[tid])
+  //      continue;
+  //
+  //    d_filterFrontier[tid] = 0;
+  //
+  //    uint32 sourceValue = d_values[tid];
+  //
+  //    const uint64 start = d_offsets[tid] - startEdge;
+  //    const uint64 end = d_offsets[tid + 1] - startEdge;
+  //
+  //    for (uint64 i = start; i < end; i ++ ) {
+  //      uint32 neighborId = d_filterEdges[i];
+  //
+  //      // If this new path has lower cost than the previous then change and
+  //      add
+  //      // the neighbor to the frontier
+  //      if (sourceValue < d_values[neighborId]) {
+  //        atomicMin(&d_values[neighborId], sourceValue);
+  //        d_frontier[neighborId] = 1;
+  //      }
+  //    }
+  //  }
+}
+
+__global__ void CC32_NeighborFilter_Kernel(const uint32 *partitionList,
+                                           uint32 *d_partitionsOffsets,
+                                           uint32 *d_values, bool *d_frontier,
+                                           const uint32 *d_filterEdges,
+                                           const uint64 *d_offsets,
+                                           bool *d_filterFrontier) {
+
+  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
+  // const uint32 tid = blockDim.x * THREADS_PER_BLOCK * blockIdx.y +
+  //                    blockDim.x * blockIdx.x + threadIdx.x;
+
+  uint32 warpIdx = tid >> WARP_SHIFT;
+  const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
+  const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
+
+  uint32 partition = partitionList[0];
+  // uint32 touch;
+  //  Start Edge
+  uint32 startEdge = d_offsets[d_partitionsOffsets[partition]];
+
+  // End Edge
+  // uint32 endEdge = d_offsets[d_partitionsOffsets[partition + 1]];
+
+  // uint32 edgeCount = endEdge - startEdge;
+  // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
+  // dimension
+  for (warpIdx += d_partitionsOffsets[partition];
+       warpIdx < d_partitionsOffsets[partition + 1]; warpIdx += numWarps) {
+    // Start offset
+    // d_partitionsOffsets[partition]
+
+    // End offset
+    // d_partitionsOffsets[partition + 1]
+
+    if (!d_filterFrontier[warpIdx])
+      continue;
+
+    d_filterFrontier[warpIdx] = 0;
+
+    uint32 sourceValue = d_values[warpIdx];
+
+    const uint64 start = d_offsets[warpIdx] - startEdge;
+    const uint64 end = d_offsets[warpIdx + 1] - startEdge;
+
+    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
+      uint32 neighborId = d_filterEdges[i];
+
+      // If this new path has lower cost than the previous then change and add
+      // the neighbor to the frontier
+      if (sourceValue < d_values[neighborId]) {
+        atomicMin(&d_values[neighborId], sourceValue);
+        d_frontier[neighborId] = 1;
+      }
+    }
+  }
+}
+
+__global__ void CC32_Static_Filter_Kernel(const uint32 *partitionList,
+                                          uint32 *d_partitionsOffsets,
+                                          uint32 *d_values, bool *d_frontier,
+                                          const uint32 *d_filterEdges,
+                                          const uint64 *d_offsets,
+                                          bool *d_filterFrontier) {
+
+  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
+  // const uint32 tid = blockDim.x * THREADS_PER_BLOCK * blockIdx.y +
+  //                    blockDim.x * blockIdx.x + threadIdx.x;
+
+  uint32 warpIdx = tid >> WARP_SHIFT;
+  const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
+  const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
+
+  uint32 partition = partitionList[0];
+  // uint32 touch;
+  //  Start Edge
+  // uint32 startEdge = d_offsets[d_partitionsOffsets[partition]];
+
+  // End Edge
+  // uint32 endEdge = d_offsets[d_partitionsOffsets[partition + 1]];
+
+  // uint32 edgeCount = endEdge - startEdge;
+  // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
+  // dimension
+  for (warpIdx += d_partitionsOffsets[partition];
+       warpIdx < d_partitionsOffsets[partition + 1]; warpIdx += numWarps) {
+    // Start offset
+    // d_partitionsOffsets[partition]
+
+    // End offset
+    // d_partitionsOffsets[partition + 1]
+
+    if (!d_filterFrontier[warpIdx])
+      continue;
+
+    d_filterFrontier[warpIdx] = 0;
+
+    uint32 sourceValue = d_values[warpIdx];
+
+    const uint64 start = d_offsets[warpIdx];
+    const uint64 end = d_offsets[warpIdx + 1];
+
+    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
+      uint32 neighborId = d_filterEdges[i];
+
+      // If this new path has lower cost than the previous then change and add
+      // the neighbor to the frontier
+      if (sourceValue < d_values[neighborId]) {
+        atomicMin(&d_values[neighborId], sourceValue);
+        d_frontier[neighborId] = 1;
       }
     }
   }

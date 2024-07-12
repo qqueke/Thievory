@@ -1,5 +1,7 @@
-datasets/
-bin/
-build/
-cmake/
+.cache/*
+datasets/*
+converter/*
+bin/*
+nsys/
+main
 teste

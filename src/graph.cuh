@@ -3,11 +3,16 @@
 
 #include "common.cuh"
 #include "numa.h"
-#include "timer.cuh"
+
+#include <fstream>
+#include <string>
+#include <vector>
+
 template <class EdgeType> class CSR {
 public:
   ALGORITHM_TYPE algorithm; // Chosen algorithm
-
+  std::string type;
+  uint32 nNGPUs;
   EdgeType *numVertices; // Total number of vertices transferred via Zero-Copy
   uint64 numEdges;       // Total number of edges
   uint64 numStaticEdges; // Number of edges in device memory
@@ -16,7 +21,8 @@ public:
   EdgeType *staticSize;   // Static Size transferred via Zero-Copy
   EdgeType *demandSize;   // Demand Size transferred via Zero-Copy
 
-  uint32 *h_partitionsOffsets; // Offsets array for partitions
+  std::vector<uint32> h_partitionsOffsets;
+  // uint32 *h_partitionsOffsets; // Offsets array for partitions
   uint32 *d_partitionsOffsets; // Offsets array for partitions
 
   uint64 *h_offsets; // Vertices array
@@ -25,8 +31,13 @@ public:
   EdgeType *h_edges;       // Edges in host memory
   EdgeType *d_staticEdges; // Edges in device memory
 
-  EdgeType *h_edges2;        // Edges in host memory
-  EdgeType *h_weights;       // Host weights
+  EdgeType *d_edges;
+  EdgeType *d_weights;
+  std::unordered_map<uint32, uint32> GPUAffinityMap;
+  EdgeType **h_edges2; // Edges in host memory
+  EdgeType *h_weights; // Host weights
+
+  EdgeType **h_weights2;     // Host weights
   EdgeType *d_staticWeights; // Device weights
 
   EdgeType *h_values; // Host values array
@@ -44,44 +55,31 @@ public:
   float *d_filterPartitionCost; // Device transfer cost for partitions given
                                 // filtering approach
 
-  float *d_partitionCost; // Device transfer cost for partitions
-                          // filtering approach
-
   float *h_partitionCost;
+  float *d_partitionCost;
 
-  uint32 *h_partition;
-  uint32 *d_partitionNum;
+  EdgeType *d_filterEdges[N_TARGET_FILTER_STREAMS];   // Filter partition to be
+                                                      // transferred
+  EdgeType *d_filterWeights[N_TARGET_FILTER_STREAMS]; // Device weights
 
-  EdgeType
-      *d_filterEdges[N_FILTER_STREAMS]; // Filter partition to be transferred
-  EdgeType *d_filterWeights;            // Device weights
+  EdgeType ***d_nFilterEdges;
+  EdgeType ***d_nFilterWeights;
 
-  EdgeType *d_neighborFilterEdges[N_FILTER_STREAMS];
+  float h_filterThreshold;
 
-  EdgeType *d_neighborFilterEdges2[N_FILTER_STREAMS];
+  uint32 avgVertPerPart;
 
-  EdgeType *d_neighborFilterEdges3[N_FILTER_STREAMS];
-  uint32 *h_filterOffset;
-  uint32 *d_filterOffset;
-
+  // Partition list
   uint32 *h_partitionList;
-  uint32 *h_neighborPartitionList;
-
-  uint32 *h_neighborPartitionList3;
-  uint32 *h_neighborPartitionList2;
   uint32 *d_partitionList;
-  uint32 *d_neighborPartitionList;
 
-  uint32 *d_neighborPartitionList3;
-  uint32 *d_neighborPartitionList2;
+  // Neighbors partition list
+  uint32 **d_nPartList;
+  uint32 **h_nPartList;
+
   bool *h_finished;
   bool *d_finished;
 
-  uint32 *h_nCoalescedPartitions;
-
-  uint32 *d_nCoalescedPartitions;
-
-  bool *h_inStatic; // Static bitmap
   bool *d_inStatic; // Data in shared memory
 
   bool *h_frontier;                        // Host Frontier
@@ -114,6 +112,19 @@ public:
   double *d_delta;    // PR only PUSH
   double *d_residual; // PR only PUSH
 
+  double *h_delta;
+  double *h_residual;
+
+  // Streams
+  cudaStream_t staticStream, demandStream, frontierStream;
+
+  std::vector<std::array<cudaStream_t, N_FILTER_STREAMS>> neighborMemCpyStreams;
+
+  std::vector<std::array<cudaStream_t, N_FILTER_STREAMS>>
+      neighborComputeStreams;
+
+  cudaStream_t streams[N_TARGET_FILTER_STREAMS];
+
   // Reset frontier and values arrays
   void ResetFrontierNValues();
 
@@ -127,10 +138,15 @@ public:
   void SetNumStaticEdges();
 
   // Initializes graph
-  void InitData(uint64 sourceVertex);
+  void InitData();
 
   // Reads input file
-  void ReadInputFile(const std::string &fileName, ALGORITHM_TYPE algo);
+  void ReadInputFile(const std::string &filePath, ALGORITHM_TYPE algo,
+                     uint64 sourceVertex, uint32 numberNGPUs,
+                     std::unordered_map<int, int> affinityMap,
+                     std::string algoType = "push");
+
+  void SetFrontierToRatio(float ratio);
 
   // Dumps results to file
   void DumpValues();
@@ -139,20 +155,72 @@ public:
   void Free();
 };
 
+template <class EdgeType> void CSR<EdgeType>::SetFrontierToRatio(float ratio) {
+
+  for (uint32 i = 0; i < *numVertices; i++) {
+    h_frontier[i] = 0;
+  }
+
+  double totalRatio = 0;
+  for (uint32 i = 0; i < *numPartitions; i++) {
+    const uint64 edgesInCurrentPartition =
+        h_offsets[h_partitionsOffsets[i + 1]] -
+        h_offsets[h_partitionsOffsets[i]];
+
+    std::vector<uint32> frontierList;
+
+    const uint64 start = h_partitionsOffsets[i];
+    const uint64 end = h_partitionsOffsets[i + 1];
+
+    const uint64 minDesiredEdges = ratio * edgesInCurrentPartition;
+    const uint64 maxDesiredEdges = (ratio + 0.05f) * edgesInCurrentPartition;
+    //
+    // std::cout << "Min edges: " << minDesiredEdges
+    //           << " Max Edges: " << maxDesiredEdges << std::endl;
+
+    double partRatio = 0;
+    for (uint32 vertexId = start; vertexId < end - 14000; vertexId++) {
+      uint64 newEdges = h_offsets[vertexId + 1] - h_offsets[vertexId];
+      partRatio += newEdges;
+    }
+
+    partRatio /= edgesInCurrentPartition;
+    totalRatio += partRatio;
+  }
+  totalRatio /= *numPartitions;
+
+  std::cout << "Avg partition ratio: " << totalRatio * 100 << std::endl;
+
+  return;
+}
+
 template <class EdgeType> void CSR<EdgeType>::ResetFrontierNValues() {
-  if (algorithm == PR)
-    cudaMemcpy(d_valuesPR, h_valuesPR, *numVertices * sizeof(*d_valuesPR),
+  if (algorithm == PR) {
+    cudaMemcpy(d_valuesPR, h_valuesPR, *numVertices * sizeof(*h_valuesPR),
                cudaMemcpyHostToDevice);
-  else
+
+    if (type == "push") {
+      cudaMemcpy(d_delta, h_delta, *numVertices * sizeof(*h_delta),
+                 cudaMemcpyHostToDevice);
+      cudaMemcpy(d_residual, h_residual, *numVertices * sizeof(*h_residual),
+                 cudaMemcpyHostToDevice);
+    }
+
+  } else
     cudaMemcpy(d_values, h_values, *numVertices * sizeof(*d_values),
                cudaMemcpyHostToDevice);
 
   cudaMemcpy(d_frontier, h_frontier, *numVertices * sizeof(*d_frontier),
              cudaMemcpyHostToDevice);
+
   cudaMemset(d_staticFrontier, 0, *numVertices * sizeof(*d_staticFrontier));
+
   cudaMemset(d_demandFrontier, 0, *numVertices * sizeof(*d_demandFrontier));
 
   cudaMemset(d_filterFrontier, 0, *numVertices * sizeof(*d_filterFrontier));
+
+  cudaMemset(d_inStatic, 0, *numVertices * sizeof(*d_inStatic));
+
   cudaDeviceSynchronize();
 
   return;
@@ -161,10 +229,16 @@ template <class EdgeType> void CSR<EdgeType>::ResetFrontierNValues() {
 template <class EdgeType> void CSR<EdgeType>::InitFrontierNValues() {
   switch (algorithm) {
   case PR:
-
     for (uint32 i = 0; i < *numVertices; i++) {
       h_frontier[i] = 1;
-      h_valuesPR[i] = 1.0 / (*numVertices);
+
+      if (type == "push") {
+        h_valuesPR[i] = (double)(1.0f - ALPHA);
+        h_delta[i] = (double)((1.0f - ALPHA) * ALPHA /
+                              (h_offsets[i + 1] - h_offsets[i]));
+        h_residual[i] = (double)0.0f;
+      } else
+        h_valuesPR[i] = 1.0 / (*numVertices);
     }
     break;
   case BFS:
@@ -194,44 +268,37 @@ template <class EdgeType> void CSR<EdgeType>::InitFrontierNValues() {
 }
 
 template <class EdgeType> void CSR<EdgeType>::SetPartitionsConfig() {
+  h_partitionsOffsets.push_back(0);
 
-  *numPartitions = (uint32)std::ceil((double)numEdges / maxEdgesInPartition);
-
-  h_partitionCost = new float[*numPartitions];
-
-  std::cout << "Number of edges: " << numEdges << std::endl;
-  std::cout << "Maximum number of edges per partition: " << maxEdgesInPartition
-            << std::endl;
-  std::cout << "Number of partitions: " << *numPartitions << std::endl;
-
-  cudaHostAlloc((void **)&h_partition, *numPartitions * sizeof(*h_partition),
-                cudaHostAllocDefault);
-
-  for (uint32 i = 0; i < *numPartitions; i++)
-    h_partition[i] = i;
-
-  h_partitionsOffsets = new uint32[*numPartitions + 1];
-  h_partitionsOffsets[0] = 0;
-  h_partitionsOffsets[*numPartitions] = *numVertices;
-
-  uint32 currentPartition = 0;
-  uint32 edgesInCurrentPartition = 0;
+  uint64 edgesInCurrentPartition = 0;
 
   for (uint32 i = 0; i < *numVertices; i++) {
     if ((h_offsets[i + 1] - h_offsets[i]) + edgesInCurrentPartition <=
         maxEdgesInPartition)
+
       edgesInCurrentPartition =
           edgesInCurrentPartition + (h_offsets[i + 1] - h_offsets[i]);
+
     else {
-      h_partitionsOffsets[++currentPartition] = i;
+      h_partitionsOffsets.push_back(i);
       edgesInCurrentPartition =
           h_offsets[i + 1] - h_offsets[i]; // This vertex should already be
                                            // included in the new partition
 
       if (edgesInCurrentPartition > maxEdgesInPartition)
-        std::cout << "We've got a problem!" << std::endl;
+        std::cout << "One partition is too small for 1 vertex: "
+                  << h_partitionsOffsets.size() << std::endl;
     }
   }
+
+  h_partitionsOffsets.push_back(*numVertices);
+
+  *numPartitions = h_partitionsOffsets.size() - 1;
+  h_partitionCost = new float[*numPartitions];
+
+  std::cout << "Maximum number of edges per partition: " << maxEdgesInPartition
+            << std::endl;
+  std::cout << "Number of partitions: " << *numPartitions << std::endl;
 
   return;
 }
@@ -243,9 +310,9 @@ template <class EdgeType> void CSR<EdgeType>::SetNumStaticEdges() {
                  &totalMemory); // Available and Total memory in bytes
 
   if (algorithm == SSSP)
-    freeMemory *= 0.25; // SSSP requires two more allocs of equal size
+    freeMemory *= 0.45; // SSSP requires two more allocs of equal size
   else
-    freeMemory *= 0.5;
+    freeMemory *= 0.9;
 
   unsigned long remainder = freeMemory % FRAGMENT;
   freeMemory = freeMemory - remainder; // Free memory in 16kB chunks
@@ -258,14 +325,12 @@ template <class EdgeType> void CSR<EdgeType>::SetNumStaticEdges() {
 
   uint64 edgesInStatic = 0;
 
-  numStaticEdges = EDGES_IN_PARTITION;
+  // numStaticEdges = EDGES_IN_PARTITION;
   for (uint32 i = 0; i < *numVertices; i++) {
     // Build static inStatic array
     if (h_offsets[i + 1] <= numStaticEdges) {
-      h_inStatic[i] = true;
       edgesInStatic = edgesInStatic + (h_offsets[i + 1] - h_offsets[i]);
-    } else
-      h_inStatic[i] = false;
+    }
   }
 
   numStaticEdges = edgesInStatic;
@@ -275,20 +340,90 @@ template <class EdgeType> void CSR<EdgeType>::SetNumStaticEdges() {
   return;
 }
 
-template <class EdgeType> void CSR<EdgeType>::InitData(uint64 sourceVertex) {
-  TimeRecord<chrono::milliseconds> process("InitData execution");
-  process.startRecord();
+// TODO: verificar se damos allocs desnecessarios
+template <class EdgeType> void CSR<EdgeType>::InitData() {
+  Timer timer(std::string("InitData execution time: "));
 
-  srcVertex = sourceVertex;
+  GPUAssert(cudaStreamCreate(&frontierStream));
+  GPUAssert(cudaStreamCreate(&staticStream));
+  GPUAssert(cudaStreamCreate(&demandStream));
 
-  if (algorithm == PR)
+  neighborMemCpyStreams.resize(nNGPUs);
+  neighborComputeStreams.resize(nNGPUs);
+
+  for (int i = 0; i < nNGPUs; ++i) {
+    cudaSetDevice(i + 1);
+    for (int j = 0; j < N_FILTER_STREAMS; ++j)
+      GPUAssert(cudaStreamCreate(&neighborMemCpyStreams[i][j]));
+  }
+
+  cudaSetDevice(0);
+
+  for (int i = 0; i < nNGPUs; ++i) {
+    for (int j = 0; j < N_FILTER_STREAMS; ++j)
+      GPUAssert(cudaStreamCreate(&neighborComputeStreams[i][j]));
+  }
+
+  for (uint32 i = 0; i < N_TARGET_FILTER_STREAMS; i++)
+    GPUAssert(cudaStreamCreate(&streams[i]));
+
+  if (nNGPUs == 0)
+    h_filterThreshold = 0.85;
+  else if (nNGPUs == 1) {
+    GPUAssert(cudaDeviceEnablePeerAccess(1, 0));
+    h_filterThreshold = 0.45;
+  } else if (nNGPUs == 2) {
+    GPUAssert(cudaDeviceEnablePeerAccess(1, 0));
+    GPUAssert(cudaDeviceEnablePeerAccess(2, 0));
+    h_filterThreshold = 0.30;
+  } else if (nNGPUs == 3) {
+    GPUAssert(cudaDeviceEnablePeerAccess(1, 0));
+    GPUAssert(cudaDeviceEnablePeerAccess(2, 0));
+    GPUAssert(cudaDeviceEnablePeerAccess(3, 0));
+    h_filterThreshold = 0.20;
+  }
+
+  // Copy the filter threshold to constant memory
+  cudaMemcpyToSymbol(d_filterThreshold, &h_filterThreshold,
+                     sizeof(h_filterThreshold));
+
+  // Allocate data in the second Numa Node
+  // if (nNGPUs > 1) {
+  //
+  //   h_edges2 = (EdgeType *)numa_alloc_onnode(numEdges * sizeof(*h_edges2),
+  //   1);
+  //
+  //   cudaHostRegister(h_edges2, numEdges * sizeof(*h_edges2),
+  //                    cudaHostRegisterDefault);
+  //
+  //   cudaMemcpy(h_edges2, h_edges, numEdges * sizeof(*h_edges2),
+  //              cudaMemcpyHostToHost);
+  //
+  //   if (algorithm == SSSP) {
+  //     h_weights2 =
+  //         (uint32 *)numa_alloc_onnode(numEdges * sizeof(*h_weights2), 1);
+  //
+  //     cudaHostRegister(h_weights2, numEdges * sizeof(*h_weights2),
+  //                      cudaHostRegisterDefault);
+  //
+  //     cudaMemcpy(h_weights2, h_weights, numEdges * sizeof(*h_weights2),
+  //                cudaMemcpyHostToHost);
+  //   }
+  //
+  //   cudaDeviceSynchronize();
+  // }
+
+  if (algorithm == PR) {
+    if (type == "push") {
+      h_delta = new double[*numVertices];
+      h_residual = new double[*numVertices];
+    }
+
     h_valuesPR = new double[*numVertices];
-  else
+  } else
     h_values = new EdgeType[*numVertices];
 
   h_frontier = new bool[*numVertices];
-  // h_filterFrontier = new bool[*numVertices];
-  h_inStatic = new bool[*numVertices];
 
   // Sizes that might get transferred to the GPU (Change to CudaDefault if we
   // end up transferring via cudaMemcpy())
@@ -301,26 +436,10 @@ template <class EdgeType> void CSR<EdgeType>::InitData(uint64 sourceVertex) {
   GPUAssert(cudaHostAlloc((void **)&numPartitions, sizeof(*numPartitions),
                           cudaHostAllocMapped));
 
-  GPUAssert(cudaHostAlloc((void **)&h_finished, sizeof(*h_finished),
-                          cudaHostAllocDefault));
-
-  GPUAssert(cudaMalloc(&d_finished, sizeof(*d_finished)));
-
-  GPUAssert(cudaHostAlloc((void **)&h_nCoalescedPartitions,
-                          sizeof(*h_nCoalescedPartitions),
-                          cudaHostAllocDefault));
-
-  GPUAssert(
-      cudaMalloc(&d_nCoalescedPartitions, sizeof(*d_nCoalescedPartitions)));
-
-  GPUAssert(cudaHostAlloc((void **)&h_filterOffset,
-                          N_FILTER_STREAMS * sizeof(*h_filterOffset),
-                          cudaHostAllocDefault));
-
-  // GPUAssert(cudaMalloc(&d_filterOffset, sizeof(*d_filterOffset)));
-
-  GPUAssert(
-      cudaMalloc(&d_filterOffset, N_FILTER_STREAMS * sizeof(*d_filterOffset)));
+  // GPUAssert(cudaHostAlloc((void **)&h_finished, sizeof(*h_finished),
+  //                         cudaHostAllocDefault));
+  //
+  // GPUAssert(cudaMalloc(&d_finished, sizeof(*d_finished)));
 
   // *h_finished = 0;
   *frontierSize = 0;
@@ -344,7 +463,6 @@ template <class EdgeType> void CSR<EdgeType>::InitData(uint64 sourceVertex) {
   GPUAssert(cudaMemset(
       d_staticList, 0,
       *numVertices * sizeof(*d_staticList))); // This can only be as big as the
-                                              // static Size tho (to improve)
 
   // Prefix Sum Array
   GPUAssert(cudaMalloc(&d_prefixSum, *numVertices * sizeof(*d_prefixSum)));
@@ -374,51 +492,46 @@ template <class EdgeType> void CSR<EdgeType>::InitData(uint64 sourceVertex) {
   GPUAssert(cudaMemset(d_filterFrontier, 0,
                        *numVertices * sizeof(*d_filterFrontier)));
 
-  // Filter Frontier Array
-  //  GPUAssert(
-  //      cudaMalloc(&d_filterFrontier, *numVertices *
-  //      sizeof(*d_filterFrontier)));
-  //  GPUAssert(cudaMemset(d_filterFrontier, 0,
-  //                       *numVertices * sizeof(*d_filterFrontier)));
-  //
-  //  GPUAssert(
-  //      cudaMalloc(&d_partitionNum, N_FILTER_STREAMS *
-  //      sizeof(*d_partitionNum)));
-  //
-
   // Mostly Values Array
   if (algorithm == PR) {
-    GPUAssert(cudaMalloc(&d_degree, *numVertices * sizeof(*d_degree)));
-    GPUAssert(cudaMemcpy(d_degree, h_degree, *numVertices * sizeof(*d_degree),
-                         cudaMemcpyHostToDevice));
+
+    // Comment this for push
+    if (type == "push") {
+      GPUAssert(cudaMalloc(&d_delta, (*numVertices + 1) * sizeof(*d_delta)));
+      GPUAssert(
+          cudaMalloc(&d_residual, (*numVertices + 1) * sizeof(*d_residual)));
+    } else {
+      GPUAssert(cudaMalloc(&d_degree, *numVertices * sizeof(*d_degree)));
+      GPUAssert(cudaMemcpy(d_degree, h_degree, *numVertices * sizeof(*d_degree),
+                           cudaMemcpyHostToDevice));
+      GPUAssert(cudaMalloc(&d_sum, *numVertices * sizeof(*d_sum)));
+      GPUAssert(cudaMemset(d_sum, 0, *numVertices * sizeof(*d_sum)));
+
+      d_thurstSum = thrust::device_ptr<double>(d_sum);
+    }
 
     GPUAssert(cudaMalloc(&d_valuesPR, *numVertices * sizeof(*d_valuesPR)));
     GPUAssert(cudaMemcpy(d_valuesPR, h_valuesPR,
                          *numVertices * sizeof(*d_valuesPR),
                          cudaMemcpyHostToDevice));
 
-    GPUAssert(cudaMalloc(&d_sum, *numVertices * sizeof(*d_sum)));
-    GPUAssert(cudaMemset(d_sum, 0, *numVertices * sizeof(*d_sum)));
-
-    d_thurstSum = thrust::device_ptr<double>(d_sum);
   } else {
     GPUAssert(cudaMalloc(&d_values, *numVertices * sizeof(*d_values)));
     GPUAssert(cudaMemcpy(d_values, h_values, *numVertices * sizeof(*d_values),
                          cudaMemcpyHostToDevice));
   }
 
-  std::cout << "Pre partitions" << std::endl;
-  // Sets number of partitions and fills h_partitionsOffsets
   SetPartitionsConfig();
 
   GPUAssert(cudaMalloc(&d_partitionsOffsets,
                        (*numPartitions + 1) * sizeof(*d_partitionsOffsets)));
-  GPUAssert(cudaMemcpy(d_partitionsOffsets, h_partitionsOffsets,
+  GPUAssert(cudaMemcpy(d_partitionsOffsets, h_partitionsOffsets.data(),
                        (*numPartitions + 1) * sizeof(*d_partitionsOffsets),
                        cudaMemcpyHostToDevice));
 
   GPUAssert(
       cudaMalloc(&d_partitionCost, *numPartitions * sizeof(*d_partitionCost)));
+
   GPUAssert(cudaMemset(d_partitionCost, 0,
                        *numPartitions * sizeof(*d_partitionCost)));
 
@@ -426,100 +539,89 @@ template <class EdgeType> void CSR<EdgeType>::InitData(uint64 sourceVertex) {
                           cudaHostAllocDefault));
 
   GPUAssert(cudaMalloc(&d_partitionList,
-                       N_FILTER_STREAMS * sizeof(*d_partitionList)));
+                       N_TARGET_FILTER_STREAMS * sizeof(*d_partitionList)));
 
-  cudaSetDevice(1);
-  GPUAssert(cudaMalloc(&d_neighborPartitionList,
-                       N_FILTER_STREAMS * sizeof(*d_neighborPartitionList)));
+  d_nPartList = new uint32_t *[nNGPUs];
 
-  cudaSetDevice(2);
-  GPUAssert(cudaMalloc(&d_neighborPartitionList2,
-                       N_FILTER_STREAMS * sizeof(*d_neighborPartitionList2)));
-  cudaSetDevice(3);
-  GPUAssert(cudaMalloc(&d_neighborPartitionList3,
-                       N_FILTER_STREAMS * sizeof(*d_neighborPartitionList3)));
+  for (uint32 i = 0; i < nNGPUs; i++) {
+    cudaSetDevice(i + 1);
+    GPUAssert(cudaMalloc(&d_nPartList[i],
+                         N_FILTER_STREAMS * sizeof(*d_nPartList[i])));
+  }
 
   cudaSetDevice(0);
 
-  for (uint32 i = 0; i < N_FILTER_STREAMS; ++i) {
+  d_nFilterEdges = new EdgeType **[nNGPUs];
+
+  if (algorithm == SSSP)
+    d_nFilterWeights = new EdgeType **[nNGPUs];
+
+  for (uint32 i = 0; i < nNGPUs; i++) {
+    cudaSetDevice(i + 1);
+
+    d_nFilterEdges[i] = new EdgeType *[N_FILTER_STREAMS];
+
+    if (algorithm == SSSP)
+      d_nFilterWeights[i] = new EdgeType *[N_FILTER_STREAMS];
+
+    for (int stream = 0; stream < N_FILTER_STREAMS; stream++) {
+      GPUAssert(cudaMalloc(&d_nFilterEdges[i][stream],
+                           maxEdgesInPartition * sizeof(EdgeType)));
+
+      if (algorithm == SSSP)
+        GPUAssert(cudaMalloc(&d_nFilterWeights[i][stream],
+                             maxEdgesInPartition * sizeof(EdgeType)));
+    }
+  }
+
+  cudaSetDevice(0);
+
+  for (uint32 i = 0; i < N_TARGET_FILTER_STREAMS; ++i) {
     GPUAssert(cudaMalloc(&d_filterEdges[i],
                          maxEdgesInPartition * sizeof(*d_filterEdges)));
 
     GPUAssert(cudaMemset(d_filterEdges[i], 0,
                          maxEdgesInPartition * sizeof(*d_filterEdges)));
 
-    cudaSetDevice(1);
-    GPUAssert(cudaMalloc(&d_neighborFilterEdges[i],
-                         maxEdgesInPartition * sizeof(*d_filterEdges)));
+    if (algorithm == SSSP) {
+      GPUAssert(cudaMalloc(&d_filterWeights[i],
+                           maxEdgesInPartition * sizeof(*d_filterWeights)));
 
-    GPUAssert(cudaMemset(d_neighborFilterEdges[i], 0,
-                         maxEdgesInPartition * sizeof(*d_filterEdges)));
+      GPUAssert(cudaMemset(d_filterWeights[i], 0,
+                           maxEdgesInPartition * sizeof(*d_filterWeights)));
+    }
+  }
 
-    cudaSetDevice(2);
-    GPUAssert(cudaMalloc(&d_neighborFilterEdges2[i],
-                         maxEdgesInPartition * sizeof(*d_filterEdges)));
+  h_nPartList = new uint32_t *[nNGPUs];
 
-    GPUAssert(cudaMemset(d_neighborFilterEdges2[i], 0,
-                         maxEdgesInPartition * sizeof(*d_filterEdges)));
-
-    cudaSetDevice(3);
-    GPUAssert(cudaMalloc(&d_neighborFilterEdges3[i],
-                         maxEdgesInPartition * sizeof(*d_filterEdges)));
-
-    GPUAssert(cudaMemset(d_neighborFilterEdges3[i], 0,
-                         maxEdgesInPartition * sizeof(*d_filterEdges)));
-
-    cudaSetDevice(0);
+  for (uint32 i = 0; i < nNGPUs; i++) {
+    GPUAssert(cudaHostAlloc((void **)&h_nPartList[i],
+                            N_FILTER_STREAMS * sizeof(*h_nPartList[i]),
+                            cudaHostAllocDefault));
   }
 
   GPUAssert(cudaHostAlloc((void **)&h_partitionList,
-                          N_FILTER_STREAMS * sizeof(*h_partitionList),
+                          N_TARGET_FILTER_STREAMS * sizeof(*h_partitionList),
                           cudaHostAllocDefault));
 
-  GPUAssert(cudaHostAlloc((void **)&h_neighborPartitionList,
-                          N_FILTER_STREAMS * sizeof(*h_neighborPartitionList),
-                          cudaHostAllocDefault));
-
-  GPUAssert(cudaHostAlloc((void **)&h_neighborPartitionList2,
-                          N_FILTER_STREAMS * sizeof(*h_neighborPartitionList2),
-                          cudaHostAllocDefault));
-
-  GPUAssert(cudaHostAlloc((void **)&h_neighborPartitionList3,
-                          N_FILTER_STREAMS * sizeof(*h_neighborPartitionList3),
-                          cudaHostAllocDefault));
-
-  if (algorithm == SSSP)
-    GPUAssert(cudaMalloc(&d_filterWeights,
-                         maxEdgesInPartition * sizeof(*d_filterWeights)));
-
-  // std::cout << "Post partitions stuff" << std::endl;
-
-  // inStatic Array
   GPUAssert(cudaMalloc(&d_inStatic, *numVertices * sizeof(*d_inStatic)));
 
   SetNumStaticEdges();
 
-  // inStatic Array
-  GPUAssert(cudaMemcpy(d_inStatic, h_inStatic,
-                       *numVertices * sizeof(*d_inStatic),
-                       cudaMemcpyHostToDevice));
+  GPUAssert(cudaMemset(d_inStatic, 0, *numVertices * sizeof(*d_inStatic)));
 
   // Static Edges Array
   GPUAssert(
       cudaMalloc(&d_staticEdges, numStaticEdges * sizeof(*d_staticEdges)));
 
-  GPUAssert(cudaMemcpy(d_staticEdges, h_edges,
-                       numStaticEdges * sizeof(*d_staticEdges),
-                       cudaMemcpyHostToDevice));
-
   // Static Weights Array for SSSP
   if (algorithm == SSSP) {
+
+    for (uint32 i = 0; i < numEdges; i++)
+      h_weights[i] = 20;
+
     GPUAssert(cudaMalloc(&d_staticWeights,
                          numStaticEdges * sizeof(*d_staticWeights)));
-
-    GPUAssert(cudaMemcpy(d_staticWeights, h_weights,
-                         numStaticEdges * sizeof(*d_staticWeights),
-                         cudaMemcpyHostToDevice));
   }
 
   // Thurst Wrappers
@@ -530,8 +632,7 @@ template <class EdgeType> void CSR<EdgeType>::InitData(uint64 sourceVertex) {
 
   GPUAssert(cudaPeekAtLastError());
 
-  process.endRecord();
-  process.print();
+  avgVertPerPart = (double)*numVertices / *numPartitions;
 
   return;
 }
@@ -539,11 +640,57 @@ template <class EdgeType> void CSR<EdgeType>::InitData(uint64 sourceVertex) {
 // Make this robust to errors reading from the file
 template <class EdgeType>
 void CSR<EdgeType>::ReadInputFile(const std::string &filePath,
-                                  ALGORITHM_TYPE algo) {
-  TimeRecord<chrono::milliseconds> process("ReadFile execution");
-  process.startRecord();
-
+                                  ALGORITHM_TYPE algo, uint64 sourceVertex,
+                                  uint32 numberNGPUs,
+                                  std::unordered_map<int, int> numaAffinityMap,
+                                  std::string algoType) {
   algorithm = algo;
+  type = algoType;
+  srcVertex = sourceVertex;
+  nNGPUs = numberNGPUs;
+
+  std::set<uint32> uniqueNumaNodes;
+  for (const auto &entry : numaAffinityMap) {
+    uniqueNumaNodes.insert(entry.second);
+  }
+
+  h_edges2 = new EdgeType *[uniqueNumaNodes.size()];
+
+  if (algorithm == SSSP)
+    h_weights2 = new EdgeType *[uniqueNumaNodes.size()];
+
+  //   if (algorithm == SSSP) {
+  //     h_weights2 =
+  //         (uint32 *)numa_alloc_onnode(numEdges * sizeof(*h_weights2), 1);
+  //
+  //     cudaHostRegister(h_weights2, numEdges * sizeof(*h_weights2),
+  //                      cudaHostRegisterDefault);
+  //
+  //     cudaMemcpy(h_weights2, h_weights, numEdges * sizeof(*h_weights2),
+  //                cudaMemcpyHostToHost);
+  //   }
+
+  // Convert set to vector
+  std::vector<uint32> numaNodesIndexing(uniqueNumaNodes.begin(),
+                                        uniqueNumaNodes.end());
+
+  // Create a map from NUMA nodes to their indices
+  std::unordered_map<uint32, uint32> numaNodeToIndex;
+  for (uint32 i = 0; i < numaNodesIndexing.size(); ++i) {
+    numaNodeToIndex[numaNodesIndexing[i]] = i;
+  }
+
+  for (const auto &entry : numaAffinityMap) {
+    uint32 gpuId = entry.first;
+    uint32 numaNode = entry.second;
+    GPUAffinityMap[gpuId] = numaNodeToIndex[numaNode];
+  }
+
+  std::cout << "GPU ID -> Index Mapping:" << std::endl;
+  for (const auto &pair : GPUAffinityMap) {
+    std::cout << "GPU" << pair.first << " -> Index " << pair.second
+              << std::endl;
+  }
 
   cudaHostAlloc((void **)&numVertices, sizeof(*numVertices),
                 cudaHostAllocMapped);
@@ -561,129 +708,184 @@ void CSR<EdgeType>::ReadInputFile(const std::string &filePath,
   infile.read((char *)&numEdges, sizeof(uint64));
 
   *numVertices = static_cast<EdgeType>(nV);
-  // numEdges = static_cast<uint64>(nE);
 
   std::cout << "Num Vertices: " << *numVertices << std::endl;
   std::cout << "Num Edges: " << numEdges << std::endl;
 
-  // uint64 *tempOffsets = new uint64[*numVertices];
-  // infile.read((char *)tempOffsets, (*numVertices) * sizeof(uint64));
-
-  // cudaHostAlloc((void **)&h_offsets, (*numVertices + 1) * sizeof(uint64),
-  // cudaHostAllocDefault); // just pinned
-
   h_offsets = new uint64[*numVertices + 1];
   infile.read((char *)h_offsets, (*numVertices) * sizeof(uint64));
 
-  // for (int i = 0; i < *numVertices; ++i)
-  //     h_offsets[i] = static_cast<uint64>(tempOffsets[i]);
-
   h_offsets[*numVertices] = numEdges;
 
-  // delete[] tempOffsets;
+  std::unordered_map<uint32, bool> allocatedNumaNodes;
 
-  uint64 *tempEdges = new uint64[numEdges];
-  infile.read((char *)tempEdges, numEdges * sizeof(uint64));
+  uint32 defaultNumaNode = 0;
+  auto it = numaAffinityMap.find(0);
+  if (it != numaAffinityMap.end())
+    defaultNumaNode = it->second;
+  else
+    std::cout << "Could not find GPU ID in numaAffinityMap" << std::endl;
 
-  // cudaHostAlloc((void **)&h_edges, numEdges * sizeof(EdgeType),
-  //              cudaHostAllocMapped);
+  // Allocate h_edges on default Numa Node
+  h_edges2[GPUAffinityMap[0]] = (EdgeType *)numa_alloc_onnode(
+      numEdges * sizeof(EdgeType), defaultNumaNode);
 
-  h_edges = (EdgeType *)numa_alloc_onnode(numEdges * sizeof(uint32), 0);
-
-  cudaHostRegister(h_edges, numEdges * sizeof(EdgeType),
+  // Pin the memory
+  cudaHostRegister(h_edges2[GPUAffinityMap[0]], numEdges * sizeof(EdgeType),
                    cudaHostRegisterMapped);
 
-  // We can prob parallelize this
-  for (int i = 0; i < numEdges; ++i)
-    h_edges[i] = static_cast<EdgeType>(tempEdges[i]);
+  if (algorithm == SSSP) {
+    h_weights2[GPUAffinityMap[0]] = (EdgeType *)numa_alloc_onnode(
+        numEdges * sizeof(EdgeType), defaultNumaNode);
 
-  delete[] tempEdges;
+    // Pin the memory
+    cudaHostRegister(h_weights2[GPUAffinityMap[0]], numEdges * sizeof(EdgeType),
+                     cudaHostRegisterMapped);
+  }
+
+  // cudaHostGetDevicePointer(&d_edges, h_edges, 0);
+
+  allocatedNumaNodes[defaultNumaNode] = true;
+  // cudaMallocManaged((void **)&h_edges, numEdges * sizeof(EdgeType));
+  //
+  // cudaMemAdvise(h_edges, numEdges * sizeof(EdgeType),
+  //               cudaMemAdviseSetAccessedBy, 0);
+
+  infile.read((char *)h_edges2[GPUAffinityMap[0]], numEdges * sizeof(uint32));
 
   if (algorithm == SSSP) {
-    uint64 *tempWeights = new uint64[numEdges];
-    infile.read((char *)tempWeights, numEdges * sizeof(uint64));
+    // uint64 *tempWeights = new uint64[numEdges];
+    // infile.read((char *)tempWeights, numEdges * sizeof(uint64));
 
-    cudaHostAlloc((void **)&h_weights, numEdges * sizeof(*h_weights),
-                  cudaHostAllocMapped);
+    // Allocate on default Numa Node
+    h_weights = (EdgeType *)numa_alloc_onnode(numEdges * sizeof(EdgeType), 0);
 
-    // We can prob parallelize this
+    // Pin the memory
+    cudaHostRegister(h_weights, numEdges * sizeof(EdgeType),
+                     cudaHostRegisterMapped);
+
+    cudaHostGetDevicePointer(&d_weights, h_weights, 0);
+
+    // Replace with file read
     for (int i = 0; i < numEdges; ++i)
-      h_weights[i] = static_cast<EdgeType>(tempWeights[i]);
+      h_weights[i] = 20;
 
-    delete[] tempWeights;
-  } else if (algorithm == PR) {
-    uint64 *tempOutDegree = new uint64[*numVertices];
-    infile.read((char *)tempOutDegree, *numVertices * sizeof(uint64));
-
+  } else if (algorithm == PR && type == "pull") {
     h_degree = new uint32[*numVertices];
 
-    // We can prob parallelize this
-
-    for (int i = 0; i < *numVertices; ++i)
-      h_degree[i] = static_cast<EdgeType>(tempOutDegree[i]);
-
-    delete[] tempOutDegree;
+    infile.read((char *)h_degree, *numVertices * sizeof(uint32));
   }
 
   infile.close();
 
-  // // Debugging
-  // for (uint64 i = *numVertices; i > *numVertices - 3; i--)
-  //     std::cout << "h_offsets[" << i << "] = " << h_offsets[i] << std::endl;
+  for (const auto &pair : numaNodeToIndex) {
+    uint32 numaNode = pair.first;
+    uint32 index = pair.second;
 
-  // // Debugging
-  // for (uint64 i = numEdges - 1; i > numEdges - 3; i--)
-  //     std::cout << "h_edges[" << i << "] = " << h_edges[i] << std::endl;
+    // Check if the NUMA node has already been allocated
+    if (allocatedNumaNodes.find(numaNode) == allocatedNumaNodes.end()) {
+      h_edges2[index] = (EdgeType *)(numa_alloc_onnode(
+          numEdges * sizeof(*h_edges2[index]), numaNode));
 
-  process.endRecord();
-  process.print();
+      // Register memory with CUDA
+      cudaHostRegister(h_edges2[index], numEdges * sizeof(*h_edges2[index]),
+                       cudaHostRegisterDefault);
+
+      cudaMemcpy(h_edges2[index], h_edges2[GPUAffinityMap[0]],
+                 numEdges * sizeof(*h_edges2[index]), cudaMemcpyHostToHost);
+
+      if (algorithm == SSSP) {
+        h_weights2[index] = (EdgeType *)(numa_alloc_onnode(
+            numEdges * sizeof(*h_weights2[index]), numaNode));
+
+        // Register memory with CUDA
+        cudaHostRegister(h_weights2[index],
+                         numEdges * sizeof(*h_weights2[index]),
+                         cudaHostRegisterDefault);
+
+        cudaMemcpy(h_weights2[index], h_weights2[GPUAffinityMap[0]],
+                   numEdges * sizeof(*h_edges2[index]), cudaMemcpyHostToHost);
+      }
+
+      allocatedNumaNodes[numaNode] = true;
+    }
+  }
+
   return;
 }
 
 template <class EdgeType> void CSR<EdgeType>::DumpValues() {
-  std::string filepath = "results/values1.bin";
+
+  if (algorithm == PR)
+    cudaMemcpy(h_valuesPR, d_valuesPR, *(numVertices) * sizeof(*h_valuesPR),
+               cudaMemcpyDeviceToHost);
+  else
+    cudaMemcpy(h_values, d_values, *(numVertices) * sizeof(*h_values),
+               cudaMemcpyDeviceToHost);
+
+  cudaDeviceSynchronize();
+
+  std::string filepath = "results/values.bin";
 
   std::ofstream file(filepath);
   if (!file.is_open())
     return;
 
-  // Write values
-  for (EdgeType i = 0; i < *numVertices; ++i)
-    file.write(reinterpret_cast<const char *>(&h_values[i]), sizeof(EdgeType));
+  // std::cout << "Results:" << std::endl;
+  if (algorithm == PR) {
+    for (EdgeType i = 0; i < *numVertices; ++i)
+      file.write(reinterpret_cast<const char *>(&h_valuesPR[i]),
+                 sizeof(*h_valuesPR));
+    // for (uint32 i = 0; i < 31; ++i)
+    //   std::cout << "[" << i << "]= " << h_valuesPR[i] << std::endl;
+
+  } else {
+    for (EdgeType i = 0; i < *numVertices; ++i)
+      file.write(reinterpret_cast<const char *>(&h_values[i]),
+                 sizeof(*h_values));
+
+    // for (uint32 i = 0; i < 31; ++i)
+    //   std::cout << "[" << i << "]= " << h_values[i] << std::endl;
+  }
 
   file.close();
 }
 
+// TODO: verificar se damos todos os frees
 template <class EdgeType> void CSR<EdgeType>::Free() {
 
   if (algorithm == SSSP)
     cudaFreeHost(h_weights);
 
-  else if (algorithm == PR)
+  else if (algorithm == PR && type == "pull")
     delete[] h_degree;
 
   delete[] h_offsets;
-  cudaFreeHost(h_edges);
+  // cudaFreeHost(h_edges);
 
-  if (algorithm == PR)
+  if (algorithm == PR) {
+    if (type == "push") {
+      cudaFree(d_residual);
+      cudaFree(d_delta);
+    } else {
+      cudaFree(d_degree);
+      cudaFree(d_sum);
+    }
+
+    cudaFree(d_valuesPR);
     delete[] h_valuesPR;
-  else
+  } else {
+
+    cudaFree(d_values);
     delete[] h_values;
+  }
 
   delete[] h_frontier;
-  delete[] h_inStatic;
 
   cudaFreeHost(frontierSize);
   cudaFreeHost(staticSize);
   cudaFreeHost(demandSize);
   cudaFreeHost(numPartitions);
-
-  // cudaFreeHost(h_nCoalescedPartitions);
-
-  // cudaFreeHost(h_finished);
-
-  // cudaFree(d_finished);
-  // cudaFree(d_nCoalescedPartitions);
 
   cudaFree(d_offsets);
 
@@ -699,26 +901,14 @@ template <class EdgeType> void CSR<EdgeType>::Free() {
 
   cudaFree(d_demandFrontier);
 
-  // cudaFree(d_filterFrontier);
-
-  if (algorithm == PR) {
-    cudaFree(d_degree);
-    cudaFree(d_valuesPR);
-    cudaFree(d_sum);
-  } else
-    cudaFree(d_values);
-
-  // delete[] h_filterPartitionCost;
-  delete[] h_partitionsOffsets;
-
-  // delete[] h_partitionCost;
+  cudaFree(d_filterFrontier);
 
   cudaFree(d_partitionsOffsets);
-  // cudaFree(d_filterPartitionCost);
   cudaFree(d_partitionCost);
 
   cudaFree(d_filterEdges);
 
+  cudaFree(d_filterWeights);
   cudaFree(d_inStatic);
   cudaFree(d_staticEdges);
 
@@ -733,47 +923,3 @@ template <class EdgeType> void CSR<EdgeType>::Free() {
 }
 
 #endif // GRAPH_CUH
-
-// Antigo Reset
-// switch (algorithm)
-// {
-// case PR:
-//     for (uint32 i = 0; i < *numVertices; i++)
-//     {
-//         h_frontier[i] = 1;
-//         h_valuesPR[i] = 1.0 / *numVertices;
-//     }
-//     cudaMemcpy(d_valuesPR, h_valuesPR, *numVertices * sizeof(double),
-//     cudaMemcpyHostToDevice); break;
-
-// case BFS:
-//     for (uint32 i = 0; i < *numVertices; i++)
-//     {
-//         h_frontier[i] = 0;
-//         h_values[i] = *numVertices + 1;
-//     }
-//     h_frontier[srcVertex] = 1;
-//     h_values[srcVertex] = 1;
-//     cudaMemcpy(d_values, h_values, *numVertices * sizeof(EdgeType),
-//     cudaMemcpyHostToDevice); break;
-
-// case CC:
-//     for (uint32 i = 0; i < *numVertices; i++)
-//     {
-//         h_frontier[i] = 1;
-//         h_values[i] = i;
-//     }
-//     cudaMemcpy(d_values, h_values, *numVertices * sizeof(EdgeType),
-//     cudaMemcpyHostToDevice); break;
-
-// case SSSP:
-//     for (uint32 i = 0; i < *numVertices; i++)
-//     {
-//         h_frontier[i] = 0;
-//         h_values[i] = *numVertices + 1;
-//     }
-//     h_frontier[srcVertex] = 1;
-//     h_values[srcVertex] = 1;
-//     cudaMemcpy(d_values, h_values, *numVertices * sizeof(EdgeType),
-//     cudaMemcpyHostToDevice); break;
-// }

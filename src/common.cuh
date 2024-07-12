@@ -5,19 +5,15 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+#include "timer.hpp"
 // Thrust utilities
 #include <thrust/device_vector.h>
 #include <thrust/functional.h>
 #include <thrust/host_vector.h>
 #include <thrust/sort.h>
 
-// Utilities
-#include <fstream>
-#include <iostream>
-#include <string>
-
-// ???????
-#include <cmath>
+#include <set>
+#include <unordered_map>
 
 typedef unsigned int uint32;       // 4 byte data type
 typedef unsigned long long uint64; // 8 byte data type
@@ -40,28 +36,17 @@ typedef unsigned long long uint64; // 8 byte data type
 #define PARTITION_SIZE_64 4194304     // Partition size for 8 byte data (32 MB)
 
 // #define PARTITION_SIZE_MB 33554432
-//   #define PARTITION_SIZE_MB 67108864
-#define PARTITION_SIZE_MB 16777216
-
+#define PARTITION_SIZE_MB 67108864
+// #define PARTITION_SIZE_MB 16777216
 // #define EDGES_IN_PARTITION 8388608 // 32 MB with 4B edge
 
-// #define EDGES_IN_PARTITION 67108864 // 256MB with 4B edge
-// #define EDGES_IN_PARTITION 134217728 * 2 // 1GB with 4B edge
-// #define EDGES_IN_PARTITION 134217728 // 512MB with 4B edge
-
-// #define EDGES_IN_PARTITION 4194304 // 16 MB with 4B edge
-
 #define EDGES_IN_PARTITION 134217728 + 67108864 // 768MB with 4B edge
-//  Our partition sizes should amount to 256MB
 
-#define N_COALESCED_PARTITIONS 4 // Number of partitions that can be coalesced
-
-#define N_FILTER_STREAMS 128
+#define N_FILTER_STREAMS 64 / 4
+#define N_TARGET_FILTER_STREAMS 24 / 4
 
 #define TOLERANCE 0.001f // Page Rank Specific
 #define ALPHA 0.85f      // Page Rank Specific
-
-#define FILTER_THRESHOLD 0.80f
 
 #define GPUAssert(ans)                                                         \
   { gpuAssert((ans), __FILE__, __LINE__); }
@@ -69,13 +54,15 @@ typedef unsigned long long uint64; // 8 byte data type
 inline void gpuAssert(cudaError_t code, const char *file, int line,
                       bool abort = true) {
   if (code != cudaSuccess) {
-    fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file,
+    fprintf(stderr, "GPUAssert: %s %s %d\n", cudaGetErrorString(code), file,
             line);
     if (abort)
       exit(code);
   }
 }
 enum ALGORITHM_TYPE { BFS, SSSP, CC, PR };
+
+__constant__ float d_filterThreshold;
 
 // GPU Kernels
 template <typename EdgeType>
@@ -119,6 +106,7 @@ __global__ void setDemandList(EdgeType *h_numVertices, EdgeType *d_demandList,
   }
 }
 
+// PR PUSH
 template <typename EdgeType>
 __global__ void setFrontier(EdgeType *activeNum, EdgeType *activeNodes,
                             bool *d_frontier) {
@@ -130,49 +118,9 @@ __global__ void setFrontier(EdgeType *activeNum, EdgeType *activeNodes,
 }
 
 template <typename EdgeType>
-__global__ void setFrontierUnified(EdgeType *staticSize, EdgeType *d_staticList,
-                                   EdgeType *demandSize, EdgeType *d_demandList,
-                                   bool *d_frontier) {
-  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-  for (EdgeType vertexId = tid; vertexId < *staticSize;
-       vertexId += blockDim.x * gridDim.x) {
-    if (d_frontier[d_staticList[vertexId]])
-      d_frontier[d_staticList[vertexId]] = 0;
-  }
-
-  for (EdgeType vertexId = tid; vertexId < *demandSize;
-       vertexId += blockDim.x * gridDim.x) {
-    if (d_frontier[d_demandList[vertexId]])
-      d_frontier[d_demandList[vertexId]] = 0;
-  }
-}
-
-template <typename EdgeType>
-__global__ void
-setSSSPFrontierNValues(EdgeType *staticSize, EdgeType *d_staticList,
-                       EdgeType *demandSize, EdgeType *d_demandList,
-                       bool *d_frontier) {
-  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-  for (EdgeType vertexId = tid; vertexId < *staticSize;
-       vertexId += blockDim.x * gridDim.x) {
-    if (d_frontier[d_staticList[vertexId]])
-      d_frontier[d_staticList[vertexId]] = 0;
-  }
-
-  for (EdgeType vertexId = tid; vertexId < *demandSize;
-       vertexId += blockDim.x * gridDim.x) {
-    if (d_frontier[d_demandList[vertexId]])
-      d_frontier[d_demandList[vertexId]] = 0;
-  }
-}
-
-template <typename EdgeType>
-__global__ void
-CalculateCostNSplitFrontiers(uint32 *numPartitions, uint32 *d_partitionsOffsets,
-                             uint64 *d_offsets, float *d_partitionCost,
-                             bool *d_demandFrontier, bool *d_filterFrontier) {
+__global__ void CalculateActiveEdgesPerPartition(
+    uint32 *numPartitions, uint32 *d_partitionsOffsets, uint64 *d_offsets,
+    float *d_partitionCost, bool *d_demandFrontier, bool *d_filterFrontier) {
 
   uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
   const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / 256;
@@ -196,9 +144,10 @@ CalculateCostNSplitFrontiers(uint32 *numPartitions, uint32 *d_partitionsOffsets,
 }
 
 template <typename EdgeType>
-__global__ void CalculateCostNSplitFrontiers2(
-    uint32 *numPartitions, uint32 *d_partitionsOffsets, uint64 *d_offsets,
-    float *d_partitionCost, bool *d_demandFrontier, bool *d_filterFrontier) {
+__global__ void
+CalculateActiveEdgesRatio(uint32 *numPartitions, uint32 *d_partitionsOffsets,
+                          uint64 *d_offsets, float *d_partitionCost,
+                          bool *d_demandFrontier, bool *d_filterFrontier) {
   uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
 
   for (; tid < *numPartitions; tid += blockDim.x * gridDim.x) {
@@ -211,7 +160,7 @@ __global__ void CalculateCostNSplitFrontiers2(
 }
 
 template <typename EdgeType>
-__global__ void CalculateCostNSplitFrontiers3(
+__global__ void SplitZeroCopyNFilterFrontiers(
     uint32 *numPartitions, uint32 *d_partitionsOffsets, uint64 *d_offsets,
     float *d_partitionCost, bool *d_demandFrontier, bool *d_filterFrontier) {
   for (uint32 partition = 0; partition < *numPartitions; partition++) {
@@ -224,27 +173,12 @@ __global__ void CalculateCostNSplitFrontiers3(
     for (tid += start; tid < end; tid += blockDim.x * gridDim.x) {
       // If the vertex is active
       if (d_demandFrontier[tid] &&
-          d_partitionCost[partition] > FILTER_THRESHOLD) {
+          d_partitionCost[partition] > d_filterThreshold) {
         d_filterFrontier[tid] = 1; // Swap these two
         d_demandFrontier[tid] = 0;
       }
     }
     // d_zerocopyPartitionCost[partition] = 0;
-  }
-}
-
-template <typename EdgeType>
-__global__ void CalculateCostNSplitFrontiers4(uint32 *numPartitions,
-                                              float *d_partitionCost,
-                                              bool *d_filterList) {
-
-  uint32 partition = blockIdx.x * blockDim.x + threadIdx.x;
-
-  for (; partition < *numPartitions; partition += blockDim.x * gridDim.x) {
-
-    if (d_partitionCost[partition] > FILTER_THRESHOLD) {
-      d_filterList[partition] = 1;
-    }
   }
 }
 
