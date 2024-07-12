@@ -1,9 +1,23 @@
 #include <iostream>
 #include <limits>
-
+#include <queue>
+#include <vector>
 void func() { return; }
 
 int main() {
+
+  std::vector<std::queue<int>> neighborGPUQueues(3);
+
+  neighborGPUQueues[0].push(1);
+
+  neighborGPUQueues[1].push(1);
+
+  neighborGPUQueues[2].push(1);
+
+  int i = neighborGPUQueues[2].front();
+
+  std::cout << i << std::endl;
+
   // Unsigned int
   std::cout << "Range of unsigned int: "
             << std::numeric_limits<unsigned int>::min() << " to "

@@ -61,7 +61,7 @@ typedef unsigned long long uint64; // 8 byte data type
 #define TOLERANCE 0.001f // Page Rank Specific
 #define ALPHA 0.85f      // Page Rank Specific
 
-#define FILTER_THRESHOLD 0.80f
+#define FILTER_THRESHOLD 0.10f
 
 #define GPUAssert(ans)                                                         \
   { gpuAssert((ans), __FILE__, __LINE__); }

@@ -25,6 +25,10 @@ void usage(const char *program_name) {
        << endl;
   cout << "  --runs : Specify the number of runs {0, 1, 2, ...} (default = 1)"
        << endl;
+  cout << "  --gpus : Specify the number of NEIGHBOR GPUs {0, 1, 2, ...} "
+          "(default = 0)"
+       << endl;
+
   exit(0);
 }
 
@@ -54,6 +58,7 @@ int main(int argc, char **argv) {
   uint32 srcVertex = 1;
   double memAdvise = 0.5f;
   uint32 nRuns = 1;
+  uint32 nNGPUs = 0;
 
   try {
     for (unsigned int i = 1; i < argc - 1; i = i + 2) {
@@ -74,6 +79,8 @@ int main(int argc, char **argv) {
 
       else if (strcmp(argv[i], "--runs") == 0)
         nRuns = atoi(argv[i + 1]);
+      else if (strcmp(argv[i], "--gpus") == 0)
+        nNGPUs = atoi(argv[i + 1]);
     }
   } catch (...) {
     std::cerr << "An exception has occurred.\n";
@@ -82,6 +89,10 @@ int main(int argc, char **argv) {
 
   if (!hasInput)
     exit(0);
+
+  // Verify if gpus exceeds the total amount of gpus
+
+  std::cout << "Running with " << nNGPUs << " neighbor GPUs" << std::endl;
 
   if (algorithm == "bfs") {
     if (type == _4BYTE)
@@ -93,7 +104,7 @@ int main(int argc, char **argv) {
       usage(argv[0]);
   } else if (algorithm == "cc") {
     if (type == _4BYTE)
-      CC32(filePath, memAdvise, nRuns);
+      CC32(filePath, memAdvise, nRuns, nNGPUs);
 
     else if (type == _8BYTE)
       CC64(filePath, memAdvise, nRuns);

@@ -5,9 +5,9 @@ void SSSP32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns) {
   ALGORITHM_TYPE algo = SSSP;
   CSR<uint32> *graph = new CSR<uint32>;
   graph->ReadInputFile(filePath, algo);
-  graph->InitData(srcVertex);
-  // Adjust this number of blocks in x dimension to be a multiple of the number
-  // of SMS and acquire better load balancing
+  // graph->InitData(srcVertex);
+  //  Adjust this number of blocks in x dimension to be a multiple of the number
+  //  of SMS and acquire better load balancing
   int device = 0; // Selected device
   uint32 k =
       4; // Multiple of SMs to choose for the grid dimension (to be adjusted)

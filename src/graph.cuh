@@ -7,7 +7,7 @@
 template <class EdgeType> class CSR {
 public:
   ALGORITHM_TYPE algorithm; // Chosen algorithm
-
+  uint32 nNGPUs;
   EdgeType *numVertices; // Total number of vertices transferred via Zero-Copy
   uint64 numEdges;       // Total number of edges
   uint64 numStaticEdges; // Number of edges in device memory
@@ -61,6 +61,9 @@ public:
   EdgeType *d_neighborFilterEdges2[N_FILTER_STREAMS];
 
   EdgeType *d_neighborFilterEdges3[N_FILTER_STREAMS];
+
+  EdgeType ***d_nFilterEdges;
+
   uint32 *h_filterOffset;
   uint32 *d_filterOffset;
 
@@ -76,6 +79,9 @@ public:
   uint32 *d_neighborPartitionList2;
   bool *h_finished;
   bool *d_finished;
+
+  uint32 **d_nPartList;
+  uint32 **h_nPartList;
 
   uint32 *h_nCoalescedPartitions;
 
@@ -127,7 +133,7 @@ public:
   void SetNumStaticEdges();
 
   // Initializes graph
-  void InitData(uint64 sourceVertex);
+  void InitData(uint64 sourceVertex, uint32 numberNGPUs);
 
   // Reads input file
   void ReadInputFile(const std::string &fileName, ALGORITHM_TYPE algo);
@@ -275,11 +281,14 @@ template <class EdgeType> void CSR<EdgeType>::SetNumStaticEdges() {
   return;
 }
 
-template <class EdgeType> void CSR<EdgeType>::InitData(uint64 sourceVertex) {
+// TODO: verificar se damos allocs desnecessarios
+template <class EdgeType>
+void CSR<EdgeType>::InitData(uint64 sourceVertex, uint32 numberNGPUs) {
   TimeRecord<chrono::milliseconds> process("InitData execution");
   process.startRecord();
 
   srcVertex = sourceVertex;
+  nNGPUs = numberNGPUs;
 
   if (algorithm == PR)
     h_valuesPR = new double[*numVertices];
@@ -428,16 +437,28 @@ template <class EdgeType> void CSR<EdgeType>::InitData(uint64 sourceVertex) {
   GPUAssert(cudaMalloc(&d_partitionList,
                        N_FILTER_STREAMS * sizeof(*d_partitionList)));
 
-  cudaSetDevice(1);
-  GPUAssert(cudaMalloc(&d_neighborPartitionList,
-                       N_FILTER_STREAMS * sizeof(*d_neighborPartitionList)));
+  d_nPartList = new uint32_t *[nNGPUs];
 
-  cudaSetDevice(2);
-  GPUAssert(cudaMalloc(&d_neighborPartitionList2,
-                       N_FILTER_STREAMS * sizeof(*d_neighborPartitionList2)));
-  cudaSetDevice(3);
-  GPUAssert(cudaMalloc(&d_neighborPartitionList3,
-                       N_FILTER_STREAMS * sizeof(*d_neighborPartitionList3)));
+  for (uint32 i = 0; i < nNGPUs; i++) {
+    cudaSetDevice(i + 1);
+    GPUAssert(cudaMalloc(&d_nPartList[i],
+                         N_FILTER_STREAMS * sizeof(*d_nPartList[i])));
+  }
+
+  cudaSetDevice(0);
+
+  d_nFilterEdges = new EdgeType **[nNGPUs];
+
+  for (uint32 i = 0; i < nNGPUs; i++) {
+    cudaSetDevice(i + 1);
+
+    d_nFilterEdges[i] = new EdgeType *[N_FILTER_STREAMS];
+
+    for (int stream = 0; stream < N_FILTER_STREAMS; stream++) {
+      GPUAssert(cudaMalloc(&d_nFilterEdges[i][stream],
+                           maxEdgesInPartition * sizeof(EdgeType)));
+    }
+  }
 
   cudaSetDevice(0);
 
@@ -447,45 +468,37 @@ template <class EdgeType> void CSR<EdgeType>::InitData(uint64 sourceVertex) {
 
     GPUAssert(cudaMemset(d_filterEdges[i], 0,
                          maxEdgesInPartition * sizeof(*d_filterEdges)));
-
-    cudaSetDevice(1);
-    GPUAssert(cudaMalloc(&d_neighborFilterEdges[i],
-                         maxEdgesInPartition * sizeof(*d_filterEdges)));
-
-    GPUAssert(cudaMemset(d_neighborFilterEdges[i], 0,
-                         maxEdgesInPartition * sizeof(*d_filterEdges)));
-
-    cudaSetDevice(2);
-    GPUAssert(cudaMalloc(&d_neighborFilterEdges2[i],
-                         maxEdgesInPartition * sizeof(*d_filterEdges)));
-
-    GPUAssert(cudaMemset(d_neighborFilterEdges2[i], 0,
-                         maxEdgesInPartition * sizeof(*d_filterEdges)));
-
-    cudaSetDevice(3);
-    GPUAssert(cudaMalloc(&d_neighborFilterEdges3[i],
-                         maxEdgesInPartition * sizeof(*d_filterEdges)));
-
-    GPUAssert(cudaMemset(d_neighborFilterEdges3[i], 0,
-                         maxEdgesInPartition * sizeof(*d_filterEdges)));
-
-    cudaSetDevice(0);
   }
+
+  h_nPartList = new uint32_t *[nNGPUs];
+
+  for (uint32 i = 0; i < nNGPUs; i++) {
+    GPUAssert(cudaHostAlloc((void **)&h_nPartList[i],
+                            N_FILTER_STREAMS * sizeof(*h_nPartList[i]),
+                            cudaHostAllocDefault));
+  }
+
+  // // Alloc on diff numa node (did not notice any improvements)
+  // for (uint32 i = 0; i < nNGPUs; i++) {
+  //  if (i > 0) {
+  //    h_nPartList[i] = (uint32_t *)numa_alloc_onnode(
+  //        N_FILTER_STREAMS * sizeof(*h_nPartList[i]), 0);
+
+  //    cudaHostRegister(h_nPartList[i],
+  //                     N_FILTER_STREAMS * sizeof(*h_nPartList[i]),
+  //                     cudaHostRegisterDefault);
+  //  } else {
+  //    h_nPartList[i] = (uint32_t *)numa_alloc_onnode(
+  //        N_FILTER_STREAMS * sizeof(*h_nPartList[i]), 1);
+
+  //    cudaHostRegister(h_nPartList[i],
+  //                     N_FILTER_STREAMS * sizeof(*h_nPartList[i]),
+  //                     cudaHostRegisterDefault);
+  //  }
+  //}
 
   GPUAssert(cudaHostAlloc((void **)&h_partitionList,
                           N_FILTER_STREAMS * sizeof(*h_partitionList),
-                          cudaHostAllocDefault));
-
-  GPUAssert(cudaHostAlloc((void **)&h_neighborPartitionList,
-                          N_FILTER_STREAMS * sizeof(*h_neighborPartitionList),
-                          cudaHostAllocDefault));
-
-  GPUAssert(cudaHostAlloc((void **)&h_neighborPartitionList2,
-                          N_FILTER_STREAMS * sizeof(*h_neighborPartitionList2),
-                          cudaHostAllocDefault));
-
-  GPUAssert(cudaHostAlloc((void **)&h_neighborPartitionList3,
-                          N_FILTER_STREAMS * sizeof(*h_neighborPartitionList3),
                           cudaHostAllocDefault));
 
   if (algorithm == SSSP)
@@ -627,14 +640,6 @@ void CSR<EdgeType>::ReadInputFile(const std::string &filePath,
 
   infile.close();
 
-  // // Debugging
-  // for (uint64 i = *numVertices; i > *numVertices - 3; i--)
-  //     std::cout << "h_offsets[" << i << "] = " << h_offsets[i] << std::endl;
-
-  // // Debugging
-  // for (uint64 i = numEdges - 1; i > numEdges - 3; i--)
-  //     std::cout << "h_edges[" << i << "] = " << h_edges[i] << std::endl;
-
   process.endRecord();
   process.print();
   return;
@@ -654,6 +659,7 @@ template <class EdgeType> void CSR<EdgeType>::DumpValues() {
   file.close();
 }
 
+// TODO: verificar se damos todos os frees
 template <class EdgeType> void CSR<EdgeType>::Free() {
 
   if (algorithm == SSSP)
@@ -733,47 +739,3 @@ template <class EdgeType> void CSR<EdgeType>::Free() {
 }
 
 #endif // GRAPH_CUH
-
-// Antigo Reset
-// switch (algorithm)
-// {
-// case PR:
-//     for (uint32 i = 0; i < *numVertices; i++)
-//     {
-//         h_frontier[i] = 1;
-//         h_valuesPR[i] = 1.0 / *numVertices;
-//     }
-//     cudaMemcpy(d_valuesPR, h_valuesPR, *numVertices * sizeof(double),
-//     cudaMemcpyHostToDevice); break;
-
-// case BFS:
-//     for (uint32 i = 0; i < *numVertices; i++)
-//     {
-//         h_frontier[i] = 0;
-//         h_values[i] = *numVertices + 1;
-//     }
-//     h_frontier[srcVertex] = 1;
-//     h_values[srcVertex] = 1;
-//     cudaMemcpy(d_values, h_values, *numVertices * sizeof(EdgeType),
-//     cudaMemcpyHostToDevice); break;
-
-// case CC:
-//     for (uint32 i = 0; i < *numVertices; i++)
-//     {
-//         h_frontier[i] = 1;
-//         h_values[i] = i;
-//     }
-//     cudaMemcpy(d_values, h_values, *numVertices * sizeof(EdgeType),
-//     cudaMemcpyHostToDevice); break;
-
-// case SSSP:
-//     for (uint32 i = 0; i < *numVertices; i++)
-//     {
-//         h_frontier[i] = 0;
-//         h_values[i] = *numVertices + 1;
-//     }
-//     h_frontier[srcVertex] = 1;
-//     h_values[srcVertex] = 1;
-//     cudaMemcpy(d_values, h_values, *numVertices * sizeof(EdgeType),
-//     cudaMemcpyHostToDevice); break;
-// }
