@@ -25,8 +25,10 @@ public:
   EdgeType *h_edges;       // Edges in host memory
   EdgeType *d_staticEdges; // Edges in device memory
 
-  EdgeType *h_edges2;        // Edges in host memory
-  EdgeType *h_weights;       // Host weights
+  EdgeType *h_edges2;  // Edges in host memory
+  EdgeType *h_weights; // Host weights
+
+  EdgeType *h_weights2;      // Host weights
   EdgeType *d_staticWeights; // Device weights
 
   EdgeType *h_values; // Host values array
@@ -54,7 +56,7 @@ public:
 
   EdgeType
       *d_filterEdges[N_FILTER_STREAMS]; // Filter partition to be transferred
-  EdgeType *d_filterWeights;            // Device weights
+  EdgeType *d_filterWeights[N_FILTER_STREAMS]; // Device weights
 
   EdgeType *d_neighborFilterEdges[N_FILTER_STREAMS];
 
@@ -63,6 +65,8 @@ public:
   EdgeType *d_neighborFilterEdges3[N_FILTER_STREAMS];
 
   EdgeType ***d_nFilterEdges;
+
+  EdgeType ***d_nFilterWeights;
 
   uint32 *h_filterOffset;
   uint32 *d_filterOffset;
@@ -147,7 +151,7 @@ public:
 
 template <class EdgeType> void CSR<EdgeType>::ResetFrontierNValues() {
   if (algorithm == PR)
-    cudaMemcpy(d_valuesPR, h_valuesPR, *numVertices * sizeof(*d_valuesPR),
+    cudaMemcpy(d_valuesPR, h_valuesPR, *numVertices * sizeof(*h_valuesPR),
                cudaMemcpyHostToDevice);
   else
     cudaMemcpy(d_values, h_values, *numVertices * sizeof(*d_values),
@@ -449,14 +453,24 @@ void CSR<EdgeType>::InitData(uint64 sourceVertex, uint32 numberNGPUs) {
 
   d_nFilterEdges = new EdgeType **[nNGPUs];
 
+  if (algorithm == SSSP)
+    d_nFilterWeights = new EdgeType **[nNGPUs];
+
   for (uint32 i = 0; i < nNGPUs; i++) {
     cudaSetDevice(i + 1);
 
     d_nFilterEdges[i] = new EdgeType *[N_FILTER_STREAMS];
 
+    if (algorithm == SSSP)
+      d_nFilterWeights[i] = new EdgeType *[N_FILTER_STREAMS];
+
     for (int stream = 0; stream < N_FILTER_STREAMS; stream++) {
       GPUAssert(cudaMalloc(&d_nFilterEdges[i][stream],
                            maxEdgesInPartition * sizeof(EdgeType)));
+
+      if (algorithm == SSSP)
+        GPUAssert(cudaMalloc(&d_nFilterWeights[i][stream],
+                             maxEdgesInPartition * sizeof(EdgeType)));
     }
   }
 
@@ -468,6 +482,12 @@ void CSR<EdgeType>::InitData(uint64 sourceVertex, uint32 numberNGPUs) {
 
     GPUAssert(cudaMemset(d_filterEdges[i], 0,
                          maxEdgesInPartition * sizeof(*d_filterEdges)));
+
+    GPUAssert(cudaMalloc(&d_filterWeights[i],
+                         maxEdgesInPartition * sizeof(*d_filterWeights)));
+
+    GPUAssert(cudaMemset(d_filterWeights[i], 0,
+                         maxEdgesInPartition * sizeof(*d_filterWeights)));
   }
 
   h_nPartList = new uint32_t *[nNGPUs];
@@ -501,10 +521,6 @@ void CSR<EdgeType>::InitData(uint64 sourceVertex, uint32 numberNGPUs) {
                           N_FILTER_STREAMS * sizeof(*h_partitionList),
                           cudaHostAllocDefault));
 
-  if (algorithm == SSSP)
-    GPUAssert(cudaMalloc(&d_filterWeights,
-                         maxEdgesInPartition * sizeof(*d_filterWeights)));
-
   // std::cout << "Post partitions stuff" << std::endl;
 
   // inStatic Array
@@ -527,6 +543,11 @@ void CSR<EdgeType>::InitData(uint64 sourceVertex, uint32 numberNGPUs) {
 
   // Static Weights Array for SSSP
   if (algorithm == SSSP) {
+
+    for (uint32 i = 0; i < numEdges; i++) {
+      h_weights[i] = 20;
+    }
+
     GPUAssert(cudaMalloc(&d_staticWeights,
                          numStaticEdges * sizeof(*d_staticWeights)));
 
@@ -601,7 +622,7 @@ void CSR<EdgeType>::ReadInputFile(const std::string &filePath,
   // cudaHostAlloc((void **)&h_edges, numEdges * sizeof(EdgeType),
   //              cudaHostAllocMapped);
 
-  h_edges = (EdgeType *)numa_alloc_onnode(numEdges * sizeof(uint32), 0);
+  h_edges = (EdgeType *)numa_alloc_onnode(numEdges * sizeof(EdgeType), 0);
 
   cudaHostRegister(h_edges, numEdges * sizeof(EdgeType),
                    cudaHostRegisterMapped);
@@ -616,12 +637,17 @@ void CSR<EdgeType>::ReadInputFile(const std::string &filePath,
     uint64 *tempWeights = new uint64[numEdges];
     infile.read((char *)tempWeights, numEdges * sizeof(uint64));
 
-    cudaHostAlloc((void **)&h_weights, numEdges * sizeof(*h_weights),
-                  cudaHostAllocMapped);
+    h_weights = (EdgeType *)numa_alloc_onnode(numEdges * sizeof(EdgeType), 0);
+
+    cudaHostRegister(h_weights, numEdges * sizeof(EdgeType),
+                     cudaHostRegisterMapped);
+
+    for (int i = 0; i < numEdges; ++i)
+      h_weights[i] = 20;
 
     // We can prob parallelize this
-    for (int i = 0; i < numEdges; ++i)
-      h_weights[i] = static_cast<EdgeType>(tempWeights[i]);
+    // for (int i = 0; i < numEdges; ++i)
+    //   h_weights[i] = static_cast<EdgeType>(tempWeights[i]);
 
     delete[] tempWeights;
   } else if (algorithm == PR) {
@@ -725,6 +751,7 @@ template <class EdgeType> void CSR<EdgeType>::Free() {
 
   cudaFree(d_filterEdges);
 
+  cudaFree(d_filterWeights);
   cudaFree(d_inStatic);
   cudaFree(d_staticEdges);
 

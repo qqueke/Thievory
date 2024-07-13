@@ -169,10 +169,9 @@ setSSSPFrontierNValues(EdgeType *staticSize, EdgeType *d_staticList,
 }
 
 template <typename EdgeType>
-__global__ void
-CalculateCostNSplitFrontiers(uint32 *numPartitions, uint32 *d_partitionsOffsets,
-                             uint64 *d_offsets, float *d_partitionCost,
-                             bool *d_demandFrontier, bool *d_filterFrontier) {
+__global__ void CalculateActiveEdgesPerPartition(
+    uint32 *numPartitions, uint32 *d_partitionsOffsets, uint64 *d_offsets,
+    float *d_partitionCost, bool *d_demandFrontier, bool *d_filterFrontier) {
 
   uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
   const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / 256;
@@ -196,9 +195,10 @@ CalculateCostNSplitFrontiers(uint32 *numPartitions, uint32 *d_partitionsOffsets,
 }
 
 template <typename EdgeType>
-__global__ void CalculateCostNSplitFrontiers2(
-    uint32 *numPartitions, uint32 *d_partitionsOffsets, uint64 *d_offsets,
-    float *d_partitionCost, bool *d_demandFrontier, bool *d_filterFrontier) {
+__global__ void
+CalculateActiveEdgesRatio(uint32 *numPartitions, uint32 *d_partitionsOffsets,
+                          uint64 *d_offsets, float *d_partitionCost,
+                          bool *d_demandFrontier, bool *d_filterFrontier) {
   uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
 
   for (; tid < *numPartitions; tid += blockDim.x * gridDim.x) {
@@ -211,7 +211,7 @@ __global__ void CalculateCostNSplitFrontiers2(
 }
 
 template <typename EdgeType>
-__global__ void CalculateCostNSplitFrontiers3(
+__global__ void SplitZeroCopyNFilterFrontiers(
     uint32 *numPartitions, uint32 *d_partitionsOffsets, uint64 *d_offsets,
     float *d_partitionCost, bool *d_demandFrontier, bool *d_filterFrontier) {
   for (uint32 partition = 0; partition < *numPartitions; partition++) {
@@ -230,21 +230,6 @@ __global__ void CalculateCostNSplitFrontiers3(
       }
     }
     // d_zerocopyPartitionCost[partition] = 0;
-  }
-}
-
-template <typename EdgeType>
-__global__ void CalculateCostNSplitFrontiers4(uint32 *numPartitions,
-                                              float *d_partitionCost,
-                                              bool *d_filterList) {
-
-  uint32 partition = blockIdx.x * blockDim.x + threadIdx.x;
-
-  for (; partition < *numPartitions; partition += blockDim.x * gridDim.x) {
-
-    if (d_partitionCost[partition] > FILTER_THRESHOLD) {
-      d_filterList[partition] = 1;
-    }
   }
 }
 

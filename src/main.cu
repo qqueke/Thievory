@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
 
   if (algorithm == "bfs") {
     if (type == _4BYTE)
-      BFS32(filePath, srcVertex, memAdvise, nRuns);
+      BFS32(filePath, srcVertex, memAdvise, nRuns, nNGPUs);
 
     else if (type == _8BYTE)
       BFS64(filePath, srcVertex, memAdvise, nRuns);
@@ -112,14 +112,15 @@ int main(int argc, char **argv) {
       usage(argv[0]);
   } else if (algorithm == "sssp") {
     if (type == _4BYTE)
-      SSSP32(filePath, srcVertex, memAdvise, nRuns);
+      SSSP32(filePath, srcVertex, memAdvise, nRuns, nNGPUs);
+
     else if (type == _8BYTE)
       SSSP64(filePath, srcVertex, memAdvise, nRuns);
     else
       usage(argv[0]);
   } else if (algorithm == "pr") {
     if (type == _4BYTE)
-      PR32(filePath, memAdvise, nRuns);
+      PR32(filePath, memAdvise, nRuns, nNGPUs);
 
     else if (type == _8BYTE)
       PR64(filePath, memAdvise, nRuns);

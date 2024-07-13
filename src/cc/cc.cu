@@ -1,4 +1,5 @@
 #include "cc.cuh"
+#include "cc_kernels.cuh"
 #include <iostream>
 #include <ostream>
 
@@ -23,9 +24,6 @@ __global__ void CalculateCostNSplitFrontiers15(const uint32 *demandSize,
   // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
   // dimension
   for (; warpIdx < *demandSize; warpIdx += numWarps) {
-    // if (!d_frontier[warpIdx]) {
-    //   continue;
-    // }
     uint32 touch;
 
     uint32 sourceValue = d_values[warpIdx];
@@ -35,66 +33,9 @@ __global__ void CalculateCostNSplitFrontiers15(const uint32 *demandSize,
 
     for (uint64 i = shiftStart + laneIdx; i < end; i += WARP_SIZE) {
       if (i >= start) {
-
-        // uint32 neighborId = h_edges[i];
-        //
-        // if (sourceValue < d_values[neighborId]) {
-        //   // atomicMin(&d_values[neighborId], sourceValue);
-        //   //  d_frontier[neighborId] = 1;
-        //   d_values[neighborId] = sourceValue;
-        // }
         touch = h_edges[i];
         d_values[touch] = sourceValue;
       }
-    }
-  }
-}
-
-__global__ void CalculateCostNSplitFrontiers14(
-    const uint32 *partitionList, uint32 *d_partitionsOffsets, uint32 *d_values,
-    bool *d_frontier, const uint32 *d_filterEdges, const uint64 *d_offsets) {
-  // (Row) + (Column) + (Thread Offset)
-  const uint32 tid = blockDim.x * THREADS_PER_BLOCK * blockIdx.y +
-                     blockDim.x * blockIdx.x + threadIdx.x;
-  uint32 warpIdx = tid >> 10;
-  const uint32 laneIdx = tid & ((1 << 10) - 1);
-  const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / 1024;
-
-  // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
-  // dimension
-  for (; warpIdx < N_FILTER_STREAMS2; warpIdx += numWarps) {
-
-    uint32 partition = partitionList[warpIdx];
-
-    // Start offset
-    // d_partitionsOffsets[partition]
-
-    // End offset
-    // d_partitionsOffsets[partition + 1]
-    uint32 touch;
-    // Start Edge
-    uint32 startEdge = d_offsets[d_partitionsOffsets[partition]];
-
-    // End Edge
-    uint32 endEdge = d_offsets[d_partitionsOffsets[partition + 1]];
-
-    uint32 edgeCount = endEdge - startEdge;
-
-    //  if (!d_frontier[warpIdx]) {
-    //    continue;
-    //  }
-
-    uint32 sourceValue = d_values[d_partitionsOffsets[partition]];
-
-    const uint64 start = warpIdx * EDGES_IN_PARTITION;
-    const uint64 end = start + edgeCount;
-
-    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
-
-      // d_values[warpIdx] += h_edges[warpIdx];
-
-      touch = d_filterEdges[i + warpIdx * EDGES_IN_PARTITION];
-      d_values[touch] = sourceValue;
     }
   }
 }
@@ -104,9 +45,6 @@ __global__ void CalculateCostNSplitFrontiers11(
     bool *d_frontier, const uint32 *d_filterEdges, const uint64 *d_offsets) {
 
   const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
-  // const uint32 tid = blockDim.x * THREADS_PER_BLOCK * blockIdx.y +
-  //                    blockDim.x * blockIdx.x + threadIdx.x;
-
   uint32 warpIdx = tid >> WARP_SHIFT;
   const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
   const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
@@ -131,349 +69,6 @@ __global__ void CalculateCostNSplitFrontiers11(
   }
 }
 
-__global__ void CalculateCostNSplitFrontiers16(const uint32 *demandSize,
-                                               uint32 *d_values,
-                                               bool *d_frontier,
-                                               const uint32 *d_edges,
-                                               const uint64 *d_offsets) {
-  // (Row) + (Column) + (Thread Offset)
-  const uint32 tid = blockDim.x * THREADS_PER_BLOCK * blockIdx.y +
-                     blockDim.x * blockIdx.x + threadIdx.x;
-  uint32 warpIdx = tid >> WARP_SHIFT;
-  const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
-  const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
-
-  // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
-  // dimension
-  for (; warpIdx < *demandSize; warpIdx += numWarps) {
-    // if (!d_frontier[warpIdx]) {
-    //   continue;
-    // }
-    uint32 touch;
-
-    uint32 sourceValue = d_values[warpIdx];
-    const uint64 start = d_offsets[warpIdx];
-    const uint64 end = d_offsets[warpIdx + 1];
-
-    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
-
-      // uint32 neighborId = h_edges[i];
-      //
-      // if (sourceValue < d_values[neighborId]) {
-      //   // atomicMin(&d_values[neighborId], sourceValue);
-      //   //  d_frontier[neighborId] = 1;
-      //   d_values[neighborId] = sourceValue;
-      // }
-      touch = d_edges[i];
-      d_values[touch] = sourceValue;
-    }
-  }
-}
-
-__global__ void CalculateCostNSplitFrontiers17(
-    const uint32 *partitionList, uint32 *d_partitionsOffsets, uint32 *d_values,
-    bool *d_frontier, const uint32 *d_filterEdges, const uint64 *d_offsets) {
-  // (Row) + (Column) + (Thread Offset)
-  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
-  uint32 warpIdx = tid >> WARP_SHIFT;
-  const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
-  const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
-
-  // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
-  // dimension
-  for (; warpIdx < N_FILTER_STREAMS2; warpIdx += numWarps) {
-
-    uint32 partition = partitionList[warpIdx];
-
-    // Start offset
-    // d_partitionsOffsets[partition]
-
-    // End offset
-    // d_partitionsOffsets[partition + 1]
-    uint32 touch;
-
-    // Start Edge
-    uint32 startEdge = d_offsets[d_partitionsOffsets[partition]];
-
-    // End Edge
-    uint32 endEdge = d_offsets[d_partitionsOffsets[partition + 1]];
-
-    uint32 edgeCount = endEdge - startEdge;
-
-    //  if (!d_frontier[warpIdx]) {
-    //    continue;
-    //  }
-
-    uint32 sourceValue = d_values[d_partitionsOffsets[partition]];
-
-    const uint64 start = warpIdx * EDGES_IN_PARTITION;
-    const uint64 end = start + edgeCount;
-
-    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
-
-      // d_values[warpIdx] += h_edges[warpIdx];
-
-      touch = d_filterEdges[i + warpIdx * EDGES_IN_PARTITION];
-      d_values[touch] = sourceValue;
-    }
-  }
-}
-
-__global__ void CalculateCostNSplitFrontiers20(
-    const uint32 *partitionList, uint32 *d_partitionsOffsets, uint32 *d_values,
-    bool *d_frontier, const uint32 *d_filterEdges, const uint64 *d_offsets,
-    bool *d_filterFrontier) {
-
-  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
-  // const uint32 tid = blockDim.x * THREADS_PER_BLOCK * blockIdx.y +
-  //                    blockDim.x * blockIdx.x + threadIdx.x;
-
-  uint32 warpIdx = tid >> WARP_SHIFT;
-  const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
-  const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
-
-  uint32 partition = partitionList[0];
-  // uint32 touch;
-  //  Start Edge
-  uint32 startEdge = d_offsets[d_partitionsOffsets[partition]];
-
-  // End Edge
-  // uint32 endEdge = d_offsets[d_partitionsOffsets[partition + 1]];
-
-  // uint32 edgeCount = endEdge - startEdge;
-
-  // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
-  // dimension
-  for (warpIdx += d_partitionsOffsets[partition];
-       warpIdx < d_partitionsOffsets[partition + 1]; warpIdx += numWarps) {
-    // Start offset
-    // d_partitionsOffsets[partition]
-
-    // End offset
-    // d_partitionsOffsets[partition + 1]
-
-    if (!d_filterFrontier[warpIdx])
-      continue;
-
-    d_filterFrontier[warpIdx] = 0;
-
-    uint32 sourceValue = d_values[warpIdx];
-
-    const uint64 start = d_offsets[warpIdx] - startEdge;
-    const uint64 end = d_offsets[warpIdx + 1] - startEdge;
-
-    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
-      uint32 neighborId = d_filterEdges[i];
-
-      // If this new path has lower cost than the previous then change and add
-      // the neighbor to the frontier
-      if (sourceValue < d_values[neighborId]) {
-        atomicMin(&d_values[neighborId], sourceValue);
-        d_frontier[neighborId] = 1;
-      }
-    }
-  }
-
-  //  uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
-  //
-  //  uint32 partition = partitionList[0];
-  //  // uint32 touch;
-  //  //  Start Edge
-  //  uint32 startEdge = d_offsets[d_partitionsOffsets[partition]];
-  //
-  //  for (tid += d_partitionsOffsets[partition];
-  //       tid < d_partitionsOffsets[partition + 1];
-  //       tid += blockDim.x * gridDim.x) {
-  //
-  //
-  //    if (!d_filterFrontier[tid])
-  //      continue;
-  //
-  //    d_filterFrontier[tid] = 0;
-  //
-  //    uint32 sourceValue = d_values[tid];
-  //
-  //    const uint64 start = d_offsets[tid] - startEdge;
-  //    const uint64 end = d_offsets[tid + 1] - startEdge;
-  //
-  //    for (uint64 i = start; i < end; i ++ ) {
-  //      uint32 neighborId = d_filterEdges[i];
-  //
-  //      // If this new path has lower cost than the previous then change and
-  //      add
-  //      // the neighbor to the frontier
-  //      if (sourceValue < d_values[neighborId]) {
-  //        atomicMin(&d_values[neighborId], sourceValue);
-  //        d_frontier[neighborId] = 1;
-  //      }
-  //    }
-  //  }
-}
-
-__global__ void CalculateCostNSplitFrontiers21(
-    const uint32 *partitionList, uint32 *d_partitionsOffsets, uint32 *d_values,
-    bool *d_frontier, const uint32 *d_filterEdges, const uint64 *d_offsets,
-    bool *d_filterFrontier) {
-
-  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
-  // const uint32 tid = blockDim.x * THREADS_PER_BLOCK * blockIdx.y +
-  //                    blockDim.x * blockIdx.x + threadIdx.x;
-
-  uint32 warpIdx = tid >> WARP_SHIFT;
-  const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
-  const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
-
-  uint32 partition = partitionList[0];
-  // uint32 touch;
-  //  Start Edge
-  uint32 startEdge = d_offsets[d_partitionsOffsets[partition]];
-
-  // End Edge
-  // uint32 endEdge = d_offsets[d_partitionsOffsets[partition + 1]];
-
-  // uint32 edgeCount = endEdge - startEdge;
-  // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
-  // dimension
-  for (warpIdx += d_partitionsOffsets[partition];
-       warpIdx < d_partitionsOffsets[partition + 1]; warpIdx += numWarps) {
-    // Start offset
-    // d_partitionsOffsets[partition]
-
-    // End offset
-    // d_partitionsOffsets[partition + 1]
-
-    if (!d_filterFrontier[warpIdx])
-      continue;
-
-    d_filterFrontier[warpIdx] = 0;
-
-    uint32 sourceValue = d_values[warpIdx];
-
-    const uint64 start = d_offsets[warpIdx] - startEdge;
-    const uint64 end = d_offsets[warpIdx + 1] - startEdge;
-
-    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
-      uint32 neighborId = d_filterEdges[i];
-
-      // If this new path has lower cost than the previous then change and add
-      // the neighbor to the frontier
-      if (sourceValue < d_values[neighborId]) {
-        atomicMin(&d_values[neighborId], sourceValue);
-        d_frontier[neighborId] = 1;
-      }
-    }
-  }
-}
-
-__global__ void CalculateCostNSplitFrontiers22(
-    const uint32 *partitionList, uint32 *d_partitionsOffsets, uint32 *d_values,
-    bool *d_frontier, const uint32 *d_filterEdges, const uint64 *d_offsets,
-    bool *d_filterFrontier) {
-
-  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
-  // const uint32 tid = blockDim.x * THREADS_PER_BLOCK * blockIdx.y +
-  //                    blockDim.x * blockIdx.x + threadIdx.x;
-
-  uint32 warpIdx = tid >> WARP_SHIFT;
-  const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
-  const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
-
-  uint32 partition = partitionList[0];
-  // uint32 touch;
-  //  Start Edge
-  uint32 startEdge = d_offsets[d_partitionsOffsets[partition]];
-
-  // End Edge
-  // uint32 endEdge = d_offsets[d_partitionsOffsets[partition + 1]];
-
-  // uint32 edgeCount = endEdge - startEdge;
-  // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
-  // dimension
-  for (warpIdx += d_partitionsOffsets[partition];
-       warpIdx < d_partitionsOffsets[partition + 1]; warpIdx += numWarps) {
-    // Start offset
-    // d_partitionsOffsets[partition]
-
-    // End offset
-    // d_partitionsOffsets[partition + 1]
-
-    if (!d_filterFrontier[warpIdx])
-      continue;
-
-    d_filterFrontier[warpIdx] = 0;
-
-    uint32 sourceValue = d_values[warpIdx];
-
-    const uint64 start = d_offsets[warpIdx] - startEdge;
-    const uint64 end = d_offsets[warpIdx + 1] - startEdge;
-
-    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
-      uint32 neighborId = d_filterEdges[i];
-
-      // If this new path has lower cost than the previous then change and add
-      // the neighbor to the frontier
-      if (sourceValue < d_values[neighborId]) {
-        atomicMin(&d_values[neighborId], sourceValue);
-        d_frontier[neighborId] = 1;
-      }
-    }
-  }
-}
-__global__ void CalculateCostNSplitFrontiers23(
-    const uint32 *partitionList, uint32 *d_partitionsOffsets, uint32 *d_values,
-    bool *d_frontier, const uint32 *d_filterEdges, const uint64 *d_offsets,
-    bool *d_filterFrontier) {
-
-  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
-  // const uint32 tid = blockDim.x * THREADS_PER_BLOCK * blockIdx.y +
-  //                    blockDim.x * blockIdx.x + threadIdx.x;
-
-  uint32 warpIdx = tid >> WARP_SHIFT;
-  const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
-  const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
-
-  uint32 partition = partitionList[0];
-  // uint32 touch;
-  //  Start Edge
-  uint32 startEdge = d_offsets[d_partitionsOffsets[partition]];
-
-  // End Edge
-  // uint32 endEdge = d_offsets[d_partitionsOffsets[partition + 1]];
-
-  // uint32 edgeCount = endEdge - startEdge;
-  // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
-  // dimension
-  for (warpIdx += d_partitionsOffsets[partition];
-       warpIdx < d_partitionsOffsets[partition + 1]; warpIdx += numWarps) {
-    // Start offset
-    // d_partitionsOffsets[partition]
-
-    // End offset
-    // d_partitionsOffsets[partition + 1]
-
-    if (!d_filterFrontier[warpIdx])
-      continue;
-
-    d_filterFrontier[warpIdx] = 0;
-
-    uint32 sourceValue = d_values[warpIdx];
-
-    const uint64 start = d_offsets[warpIdx] - startEdge;
-    const uint64 end = d_offsets[warpIdx + 1] - startEdge;
-
-    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
-      uint32 neighborId = d_filterEdges[i];
-
-      // If this new path has lower cost than the previous then change and add
-      // the neighbor to the frontier
-      if (sourceValue < d_values[neighborId]) {
-        atomicMin(&d_values[neighborId], sourceValue);
-        d_frontier[neighborId] = 1;
-      }
-    }
-  }
-}
-
 // #define ZC
 
 void CC32(string filePath, double memAdvise, uint32 nRuns,
@@ -484,8 +79,6 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
   graph->ReadInputFile(filePath, algo);
   graph->InitData(0, nNeighborGPUs);
 
-  // Adjust this number of blocks in x dimension to be a multiple of the number
-  // of SMS and acquire better load balancing
   int device = 0;
   uint32 k = 4;
 
@@ -603,19 +196,19 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
                          thrust::plus<uint32>());
 
       if (*graph->frontierSize > 20000000) {
-        CalculateCostNSplitFrontiers<uint32>
+        CalculateActiveEdgesPerPartition<uint32>
             <<<staticGrid, blockDim, 0, demandStream>>>(
                 graph->numPartitions, graph->d_partitionsOffsets,
                 graph->d_offsets, graph->d_partitionCost,
                 graph->d_demandFrontier, graph->d_filterFrontier);
 
-        CalculateCostNSplitFrontiers2<uint32>
+        CalculateActiveEdgesRatio<uint32>
             <<<staticGrid, blockDim, 0, demandStream>>>(
                 graph->numPartitions, graph->d_partitionsOffsets,
                 graph->d_offsets, graph->d_partitionCost,
                 graph->d_demandFrontier, graph->d_filterFrontier);
 
-        CalculateCostNSplitFrontiers3<uint32>
+        SplitZeroCopyNFilterFrontiers<uint32>
             <<<staticGrid, blockDim, 0, demandStream>>>(
                 graph->numPartitions, graph->d_partitionsOffsets,
                 graph->d_offsets, graph->d_partitionCost,
@@ -855,8 +448,7 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
 
             //   cudaDeviceSynchronize();
             k0.startRecord();
-            CalculateCostNSplitFrontiers20<<<staticGrid, blockDim, 0,
-                                             streams[tStream]>>>(
+            CC32_Filter_Kernel<<<staticGrid, blockDim, 0, streams[tStream]>>>(
                 &graph->d_partitionList[tStream], graph->d_partitionsOffsets,
                 graph->d_values, graph->d_frontier,
                 graph->d_filterEdges[tStream], graph->d_offsets,
@@ -885,7 +477,7 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
               cudaSetDevice(0);
               neighborGPUQueues[gpu].pop();
 
-              CalculateCostNSplitFrontiers21<<<
+              CC32_NeighborFilter_Kernel<<<
                   staticGrid, blockDim, 0,
                   neighborComputeStreams[gpu][nStream]>>>(
                   &graph->d_nPartList[gpu][nStream], graph->d_partitionsOffsets,
@@ -905,8 +497,7 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
           targetGPUQueue.pop();
 
           k0.startRecord();
-          CalculateCostNSplitFrontiers20<<<staticGrid, blockDim, 0,
-                                           streams[tStream]>>>(
+          CC32_Filter_Kernel<<<staticGrid, blockDim, 0, streams[tStream]>>>(
               &graph->d_partitionList[tStream], graph->d_partitionsOffsets,
               graph->d_values, graph->d_frontier, graph->d_filterEdges[tStream],
               graph->d_offsets, graph->d_filterFrontier);
@@ -934,7 +525,7 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
             cudaSetDevice(0);
             neighborGPUQueues[gpu].pop();
 
-            CalculateCostNSplitFrontiers21<<<
+            CC32_NeighborFilter_Kernel<<<
                 staticGrid, blockDim, 0,
                 neighborComputeStreams[gpu][nStream]>>>(
                 &graph->d_nPartList[gpu][nStream], graph->d_partitionsOffsets,

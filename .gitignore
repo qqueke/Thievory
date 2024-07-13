@@ -2,4 +2,5 @@ datasets/
 bin/
 build/
 cmake/
+nsys/
 teste

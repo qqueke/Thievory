@@ -7,7 +7,7 @@
 #include <vector>
 
 // #define WEIGHTED 0
-#define UNDIRECTED
+// #define UNDIRECTED
 typedef unsigned int uint32;
 typedef unsigned long long uint64;
 
