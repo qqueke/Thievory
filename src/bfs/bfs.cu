@@ -472,7 +472,7 @@ void BFS32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
 
   cudaDeviceSynchronize();
 
-  for (uint32 i = 0; i < 20; i++) {
+  for (uint32 i = 0; i < 31; i++) {
     std::cout << "Our result: " << graph->h_values[i] << std::endl;
   }
 

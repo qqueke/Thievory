@@ -2,7 +2,7 @@
 #define SSSP_H
 
 #include "../common.cuh"
-#include "../graph.cu"
+#include "../graph.cuh"
 #include "../timer.cuh"
 #include "sssp_kernels.cuh"
 

@@ -4,6 +4,9 @@
 #include "common.cuh"
 #include "numa.h"
 #include "timer.cuh"
+
+#include <fstream>
+#include <vector>
 template <class EdgeType> class CSR {
 public:
   ALGORITHM_TYPE algorithm; // Chosen algorithm
@@ -142,12 +145,67 @@ public:
   // Reads input file
   void ReadInputFile(const std::string &fileName, ALGORITHM_TYPE algo);
 
+  void SetFrontierToRatio(float ratio);
+
   // Dumps results to file
   void DumpValues();
 
   // Frees all allocated arrays in host and device
   void Free();
 };
+
+template <class EdgeType> void CSR<EdgeType>::SetFrontierToRatio(float ratio) {
+
+  for (uint32 i = 0; i < *numVertices; i++) {
+    h_frontier[i] = 0;
+  }
+
+  for (uint32 i = 0; i < *numPartitions; i++) {
+    const uint64 edgesInCurrentPartition =
+        h_offsets[h_partitionsOffsets[i + 1]] -
+        h_offsets[h_partitionsOffsets[i]];
+
+    vector<uint32> frontierList;
+
+    const uint64 start = h_partitionsOffsets[i];
+    const uint64 end = h_partitionsOffsets[i + 1];
+
+    const uint64 minDesiredEdges = ratio * edgesInCurrentPartition;
+    const uint64 maxDesiredEdges = (ratio + 0.09f) * edgesInCurrentPartition;
+    //
+    // std::cout << "Min edges: " << minDesiredEdges
+    //           << " Max Edges: " << maxDesiredEdges << std::endl;
+
+    uint64 totalEdges = 0;
+    for (uint32 vertexId = start; vertexId < end; vertexId++) {
+
+      uint64 newEdges = h_offsets[vertexId + 1] - h_offsets[vertexId];
+
+      if (totalEdges + newEdges > maxDesiredEdges) {
+        // Restart from start+1
+        frontierList.clear();
+        vertexId = start;
+        totalEdges = 0;
+
+      } else if (totalEdges + newEdges >= minDesiredEdges) {
+        // We're done
+        frontierList.push_back(vertexId);
+        break;
+      } else {
+        frontierList.push_back(vertexId);
+      }
+    }
+
+    if (frontierList.size() == 0)
+      std::cout << "We have a problem" << std::endl;
+
+    for (uint32 j = 0; j < frontierList.size(); j++) {
+      h_frontier[frontierList[j]] = 1;
+    }
+  }
+
+  return;
+}
 
 template <class EdgeType> void CSR<EdgeType>::ResetFrontierNValues() {
   if (algorithm == PR)
@@ -595,50 +653,39 @@ void CSR<EdgeType>::ReadInputFile(const std::string &filePath,
   infile.read((char *)&numEdges, sizeof(uint64));
 
   *numVertices = static_cast<EdgeType>(nV);
-  // numEdges = static_cast<uint64>(nE);
 
   std::cout << "Num Vertices: " << *numVertices << std::endl;
   std::cout << "Num Edges: " << numEdges << std::endl;
 
-  // uint64 *tempOffsets = new uint64[*numVertices];
-  // infile.read((char *)tempOffsets, (*numVertices) * sizeof(uint64));
-
-  // cudaHostAlloc((void **)&h_offsets, (*numVertices + 1) * sizeof(uint64),
-  // cudaHostAllocDefault); // just pinned
-
   h_offsets = new uint64[*numVertices + 1];
   infile.read((char *)h_offsets, (*numVertices) * sizeof(uint64));
 
-  // for (int i = 0; i < *numVertices; ++i)
-  //     h_offsets[i] = static_cast<uint64>(tempOffsets[i]);
-
   h_offsets[*numVertices] = numEdges;
-
-  // delete[] tempOffsets;
 
   uint64 *tempEdges = new uint64[numEdges];
   infile.read((char *)tempEdges, numEdges * sizeof(uint64));
 
-  // cudaHostAlloc((void **)&h_edges, numEdges * sizeof(EdgeType),
-  //              cudaHostAllocMapped);
-
+  // Allocate h_edges on default Numa Node
   h_edges = (EdgeType *)numa_alloc_onnode(numEdges * sizeof(EdgeType), 0);
 
+  // Pin the memory
   cudaHostRegister(h_edges, numEdges * sizeof(EdgeType),
                    cudaHostRegisterMapped);
 
   // We can prob parallelize this
   for (int i = 0; i < numEdges; ++i)
-    h_edges[i] = static_cast<EdgeType>(tempEdges[i]);
+    h_edges[i] = (EdgeType)tempEdges[i];
 
   delete[] tempEdges;
 
   if (algorithm == SSSP) {
-    uint64 *tempWeights = new uint64[numEdges];
-    infile.read((char *)tempWeights, numEdges * sizeof(uint64));
+    // uint64 *tempWeights = new uint64[numEdges];
+    // infile.read((char *)tempWeights, numEdges * sizeof(uint64));
 
+    // Allocate on default Numa Node
     h_weights = (EdgeType *)numa_alloc_onnode(numEdges * sizeof(EdgeType), 0);
 
+    // Pin the memory
     cudaHostRegister(h_weights, numEdges * sizeof(EdgeType),
                      cudaHostRegisterMapped);
 
@@ -649,8 +696,9 @@ void CSR<EdgeType>::ReadInputFile(const std::string &filePath,
     // for (int i = 0; i < numEdges; ++i)
     //   h_weights[i] = static_cast<EdgeType>(tempWeights[i]);
 
-    delete[] tempWeights;
+    // delete[] tempWeights;
   } else if (algorithm == PR) {
+    // Only used for CSC really
     uint64 *tempOutDegree = new uint64[*numVertices];
     infile.read((char *)tempOutDegree, *numVertices * sizeof(uint64));
 

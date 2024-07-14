@@ -135,17 +135,9 @@ void ConvertTxtToBCSC(std::string filePath, uint32 linesToSkip) {
   // First the header (numVertices and numEdges)
   outfile.write((char *)&numVertices, sizeof(numVertices));
   outfile.write((char *)&numEdges, sizeof(numEdges));
-
-  // Then the offsets array
+  // Offsets, Edges, OutDegree (uint64)
   outfile.write((char *)offsets, numVertices * sizeof(*offsets));
-
-  // Then the edges array
   outfile.write((char *)edges, numEdges * sizeof(*edges));
-
-  // Finally the weights
-  // outfile.write((char *)weights, numEdges * sizeof(*weights));
-
-  // Finally write the outDegree
   outfile.write((char *)outDegree, numVertices * sizeof(*outDegree));
 
   outfile.close();

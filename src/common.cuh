@@ -12,8 +12,6 @@
 #include <thrust/sort.h>
 
 // Utilities
-#include <fstream>
-#include <iostream>
 #include <string>
 
 // ???????
@@ -61,7 +59,7 @@ typedef unsigned long long uint64; // 8 byte data type
 #define TOLERANCE 0.001f // Page Rank Specific
 #define ALPHA 0.85f      // Page Rank Specific
 
-#define FILTER_THRESHOLD 0.10f
+#define FILTER_THRESHOLD 0.01f
 
 #define GPUAssert(ans)                                                         \
   { gpuAssert((ans), __FILE__, __LINE__); }
@@ -119,6 +117,7 @@ __global__ void setDemandList(EdgeType *h_numVertices, EdgeType *d_demandList,
   }
 }
 
+// PR PUSH
 template <typename EdgeType>
 __global__ void setFrontier(EdgeType *activeNum, EdgeType *activeNodes,
                             bool *d_frontier) {
@@ -126,45 +125,6 @@ __global__ void setFrontier(EdgeType *activeNum, EdgeType *activeNodes,
        vertexId < *activeNum; vertexId += blockDim.x * gridDim.x) {
     if (d_frontier[activeNodes[vertexId]])
       d_frontier[activeNodes[vertexId]] = 0;
-  }
-}
-
-template <typename EdgeType>
-__global__ void setFrontierUnified(EdgeType *staticSize, EdgeType *d_staticList,
-                                   EdgeType *demandSize, EdgeType *d_demandList,
-                                   bool *d_frontier) {
-  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-  for (EdgeType vertexId = tid; vertexId < *staticSize;
-       vertexId += blockDim.x * gridDim.x) {
-    if (d_frontier[d_staticList[vertexId]])
-      d_frontier[d_staticList[vertexId]] = 0;
-  }
-
-  for (EdgeType vertexId = tid; vertexId < *demandSize;
-       vertexId += blockDim.x * gridDim.x) {
-    if (d_frontier[d_demandList[vertexId]])
-      d_frontier[d_demandList[vertexId]] = 0;
-  }
-}
-
-template <typename EdgeType>
-__global__ void
-setSSSPFrontierNValues(EdgeType *staticSize, EdgeType *d_staticList,
-                       EdgeType *demandSize, EdgeType *d_demandList,
-                       bool *d_frontier) {
-  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-  for (EdgeType vertexId = tid; vertexId < *staticSize;
-       vertexId += blockDim.x * gridDim.x) {
-    if (d_frontier[d_staticList[vertexId]])
-      d_frontier[d_staticList[vertexId]] = 0;
-  }
-
-  for (EdgeType vertexId = tid; vertexId < *demandSize;
-       vertexId += blockDim.x * gridDim.x) {
-    if (d_frontier[d_demandList[vertexId]])
-      d_frontier[d_demandList[vertexId]] = 0;
   }
 }
 

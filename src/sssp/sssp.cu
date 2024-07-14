@@ -190,6 +190,7 @@ void SSSP32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
 
         cudaStreamSynchronize(frontierStream);
 
+        cudaDeviceSynchronize();
         SSSP32_Static_Kernel<<<staticGrid, blockDim, 0, staticStream>>>(
             graph->staticSize, graph->d_staticList, graph->d_offsets,
             graph->d_staticEdges, graph->d_staticWeights, graph->d_values,
@@ -214,7 +215,7 @@ void SSSP32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
                      (numBlocks + THREADS_PER_BLOCK) / THREADS_PER_BLOCK);
 
         cudaStreamSynchronize(frontierStream);
-
+        cudaDeviceSynchronize();
         SSSP32_Demand_Kernel<<<gridDim, blockDim, 0, demandStream>>>(
             graph->demandSize, graph->d_demandList, graph->d_values,
             graph->d_frontier, graph->h_edges, graph->h_weights,
@@ -494,7 +495,7 @@ void SSSP32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
 
   cudaDeviceSynchronize();
 
-  for (uint32 i = 0; i < 20; i++) {
+  for (uint32 i = 0; i < 31; i++) {
     std::cout << "Our result: " << graph->h_values[i] << std::endl;
   }
 
@@ -507,6 +508,7 @@ void SSSP32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
   for (uint32 i = 0; i < *graph->numVertices; ++i)
     file.write(reinterpret_cast<const char *>(&graph->h_values[i]),
                sizeof(uint32));
+  //
 
   // for (uint32 i = 0; i < *graph->numVertices; ++i)
   //   file.write(reinterpret_cast<const char *>(&graph->h_offsets[i]),

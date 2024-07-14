@@ -2,7 +2,7 @@
 #define PR_H
 
 #include "../common.cuh"
-#include "../graph.cu"
+#include "../graph.cuh"
 #include "../timer.cuh"
 #include "pr_kernels.cuh"
 

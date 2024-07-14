@@ -101,10 +101,14 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
 
   cudaDeviceSynchronize();
 
+  uint64 totalNumFilterPartitions = 0;
+
   std::cout << "Starting Traversals" << std::endl;
   for (int test = 0; test < nRuns; test++) {
 
     graph->ResetFrontierNValues();
+
+    // graph->SetFrontierToRatio(0.10f);
 
     *(graph->frontierSize) = thrust::reduce(
         graph->thrustFrontier, graph->thrustFrontier + *(graph->numVertices), 0,
@@ -120,10 +124,6 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
           graph->d_demandFrontier, graph->d_inStatic);
 
       cudaStreamSynchronize(frontierStream);
-
-      // cudaMemsetAsync(graph->d_frontier, 0,
-      //                 *(graph->numVertices) * sizeof(*graph->d_frontier),
-      //                 frontierStream);
 
       // Calculate the amount of active nodes in GPU memory
       *(graph->staticSize) =
@@ -207,16 +207,8 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
       }
 
       if (*graph->frontierSize > 20000000) {
-
-        uint32 numParts = 0;
-        uint32 numPartsNGPU = 0;
-
-        uint32 numPartsNGPU0 = 0;
-        uint32 numPartsNGPU1 = 0;
-        uint32 numPartsNGPU2 = 0;
-        uint32 numPartsNGPU3 = 0;
-
-        uint32 teoNumParts = 0;
+        uint32 numPartitionsOnTarget = 0;
+        uint32 numPartitionsOnNeighbors = 0;
 
         std::queue<uint32> targetGPUQueue;
         std::vector<std::queue<uint32>> neighborGPUQueues(nNeighborGPUs);
@@ -236,11 +228,11 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
 
         cudaStreamSynchronize(frontierStream);
 
+        totalNumFilterPartitions += partitionList.size();
+
         for (uint32 index = 0; index < partitionList.size(); index++) {
 
           uint32 partition = partitionList[index];
-
-          numParts++;
 
           // Partition edge start
           uint32 start =
@@ -249,8 +241,6 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
           uint32 partitionSize =
               graph->h_offsets[graph->h_partitionsOffsets[partition + 1]] -
               start;
-
-          // uint32 stream = partition % N_FILTER_STREAMS2;
 
           uint32 stream = (index / nGPUs) % N_FILTER_STREAMS2;
 
@@ -280,8 +270,6 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
 
             index++;
             partition = partitionList[index];
-
-            teoNumParts++;
 
             // Partition edge start
             uint32 neighborStart =
@@ -337,8 +325,8 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
                 cudaStreamSynchronize(streams[tStream]);
             }
 
-            numPartsNGPU0++;
             targetGPUQueue.pop();
+            numPartitionsOnTarget++;
 
             //   cudaDeviceSynchronize();
             k0.startRecord();
@@ -371,6 +359,7 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
 
               cudaSetDevice(0);
               neighborGPUQueues[gpu].pop();
+              numPartitionsOnNeighbors++;
 
               PR32_NeighborFilter_Kernel<<<
                   staticGrid, blockDim, 0,
@@ -389,9 +378,8 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
           uint32 tStream = targetGPUQueue.front();
 
           cudaStreamSynchronize(streams[tStream]);
-          numPartsNGPU0++;
           targetGPUQueue.pop();
-
+          numPartitionsOnTarget++;
           k0.startRecord();
           PR32_Filter_Kernel<<<staticGrid, blockDim, 0, streams[tStream]>>>(
               &graph->d_partitionList[tStream], graph->d_partitionsOffsets,
@@ -408,16 +396,8 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
             uint32 nStream = neighborGPUQueues[gpu].front();
 
             cudaSetDevice(gpu + 1);
-            cudaError_t streamStatus =
-                cudaStreamQuery(neighborMemCpyStreams[gpu][nStream]);
 
-            if (streamStatus == cudaErrorNotReady) {
-              if (neighborGPUQueues[gpu].size() < N_FILTER_STREAMS2) {
-                cudaSetDevice(0);
-                continue;
-              } else
-                cudaStreamSynchronize(neighborMemCpyStreams[gpu][nStream]);
-            }
+            cudaStreamSynchronize(neighborMemCpyStreams[gpu][nStream]);
 
             cudaSetDevice(0);
             neighborGPUQueues[gpu].pop();
@@ -430,27 +410,14 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
                 graph->d_nFilterEdges[gpu][nStream], graph->d_offsets,
                 graph->d_filterFrontier, graph->d_valuesPR, graph->d_degree,
                 graph->d_sum);
-            //   cudaDeviceSynchronize();
           }
         }
 
-        std::cout << "Partitions to be processed target GPU: " << numParts
-                  << std::endl;
-        std::cout << "Partitions processed in GPU 0: " << numPartsNGPU0
-                  << std::endl;
+        std::cout << "Partitions processed in target GPU: "
+                  << numPartitionsOnTarget << std::endl;
 
         std::cout << "Partitions to be processed in neighbor GPUs: "
-                  << teoNumParts << std::endl;
-
-        std::cout << "Partitions processed in neighbor GPUs: " << numPartsNGPU
-                  << std::endl;
-        std::cout << "Partitions processed in neighbor GPU 1: " << numPartsNGPU1
-                  << std::endl;
-        std::cout << "Partitions processed in neighbor GPU 2: " << numPartsNGPU2
-                  << std::endl;
-
-        std::cout << "Partitions processed in neighbor GPU 3: " << numPartsNGPU3
-                  << std::endl;
+                  << numPartitionsOnNeighbors << std::endl;
       }
 
       cudaDeviceSynchronize();
@@ -465,10 +432,21 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
           graph->thrustFrontier, graph->thrustFrontier + *(graph->numVertices),
           0, thrust::plus<uint32>());
     }
+    totalProcess.endRecord();
   }
 
-  totalProcess.endRecord();
   totalProcess.print();
+
+  const uint64 partitionSizeMB = PARTITION_SIZE_MB / (1024 * 1024); // 1024^2
+
+  uint64 MBytes = totalNumFilterPartitions * partitionSizeMB;
+
+  // uint64 GBytes = MBytes >> 10;
+  std::cout << "Total partitions in filter: " << totalNumFilterPartitions
+            << std::endl;
+
+  std::cout << "Total amount of data sent with filter: " << MBytes << " MB"
+            << std::endl;
 
   // We're gonna need to compare results now!!
   cudaMemcpy(graph->h_valuesPR, graph->d_valuesPR,
