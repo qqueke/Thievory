@@ -205,7 +205,7 @@ void BFS32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
         for (uint32 partition = 0; partition < *graph->numPartitions;
              partition++) {
 
-          if (graph->h_partitionCost[partition] <= FILTER_THRESHOLD)
+          if (graph->h_partitionCost[partition] <= graph->h_filterThreshold)
             continue;
 
           partitionList.push_back(partition);
