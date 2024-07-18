@@ -75,6 +75,8 @@ inline void gpuAssert(cudaError_t code, const char *file, int line,
 }
 enum ALGORITHM_TYPE { BFS, SSSP, CC, PR };
 
+__constant__ float d_filterThreshold;
+
 // GPU Kernels
 template <typename EdgeType>
 __global__ void
@@ -184,7 +186,7 @@ __global__ void SplitZeroCopyNFilterFrontiers(
     for (tid += start; tid < end; tid += blockDim.x * gridDim.x) {
       // If the vertex is active
       if (d_demandFrontier[tid] &&
-          d_partitionCost[partition] > FILTER_THRESHOLD) {
+          d_partitionCost[partition] > d_filterThreshold) {
         d_filterFrontier[tid] = 1; // Swap these two
         d_demandFrontier[tid] = 0;
       }

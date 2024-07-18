@@ -14,6 +14,7 @@ typedef unsigned long long uint64;
 struct LiberatorEdge {
   uint32 dest;
   uint32 weight;
+  operator uint32() const { return (dest << 16) | weight; }
 };
 
 struct Edge {
@@ -145,7 +146,8 @@ void ConvertTxtToBCSC(std::string filePath, uint32 linesToSkip) {
   return;
 }
 
-void ConvertTxtToBCSR(std::string filePath, uint32 linesToSkip) {
+void ConvertTxtToBCSR(std::string filePath, uint32 linesToSkip,
+                      bool liberator) {
   std::cout << "Converting to CSR" << std::endl;
 
   std::string line;
@@ -225,29 +227,60 @@ void ConvertTxtToBCSR(std::string filePath, uint32 linesToSkip) {
 #endif
   }
 
-  // Hard coded to extract the .txt and put it as bcsr (Byte CSR)
-  std::ofstream outfile(filePath.substr(0, filePath.length() - 3) + "csr",
-                        std::ofstream::binary);
+  if (!liberator) {
+    // Hard coded to extract the .txt and put it as bcsr (Byte CSR)
+    std::ofstream outfile(filePath.substr(0, filePath.length() - 3) + ".csr",
+                          std::ofstream::binary);
 
-  if (!outfile.is_open()) {
-    std::cerr << "Error opening file for writing." << std::endl;
-    exit(0);
+    if (!outfile.is_open()) {
+      std::cerr << "Error opening file for writing." << std::endl;
+      exit(0);
+    }
+
+    // First the header (numVertices and numEdges)
+    outfile.write((char *)&numVertices, sizeof(numVertices));
+    outfile.write((char *)&numEdges, sizeof(numEdges));
+
+    // Then the offsets array
+    outfile.write((char *)offsets, numVertices * sizeof(*offsets));
+
+    // Then the edges array
+    outfile.write((char *)edges, numEdges * sizeof(*edges));
+
+    // Finally the weights
+    outfile.write((char *)weights, numEdges * sizeof(*weights));
+
+    outfile.close();
+  } else {
+    // Hard coded to extract the .txt and put it as bcsr (Byte CSR)
+    std::ofstream outfile(filePath.substr(0, filePath.length() - 3) + ".wcsr",
+                          std::ofstream::binary);
+
+    if (!outfile.is_open()) {
+      std::cerr << "Error opening file for writing." << std::endl;
+      exit(0);
+    }
+
+    // First the header (numVertices and numEdges)
+    outfile.write((char *)&numVertices, sizeof(numVertices));
+    outfile.write((char *)&numEdges, sizeof(numEdges));
+
+    // Then the offsets array
+    outfile.write((char *)offsets, numVertices * sizeof(*offsets));
+
+    //  LiberatorEdge *edgesLiberator = new LiberatorEdge[numEdges];
+
+    std::vector<LiberatorEdge> edgesLiberator;
+
+    for (unsigned long long i = 0; i < numEdges; i++) {
+      edgesLiberator.push_back({(uint32)edges[i], 20});
+    }
+
+    outfile.write(reinterpret_cast<const char *>(edgesLiberator.data()),
+                  edgesLiberator.size() * sizeof(LiberatorEdge));
+
+    outfile.close();
   }
-
-  // First the header (numVertices and numEdges)
-  outfile.write((char *)&numVertices, sizeof(numVertices));
-  outfile.write((char *)&numEdges, sizeof(numEdges));
-
-  // Then the offsets array
-  outfile.write((char *)offsets, numVertices * sizeof(*offsets));
-
-  // Then the edges array
-  outfile.write((char *)edges, numEdges * sizeof(*edges));
-
-  // Finally the weights
-  outfile.write((char *)weights, numEdges * sizeof(*weights));
-
-  outfile.close();
 
   return;
 }
@@ -380,11 +413,11 @@ int main(int argc, char **argv) {
   }
 
   if (type == "csr")
-    ConvertTxtToBCSR(filePath, linesToSkip);
+    ConvertTxtToBCSR(filePath, linesToSkip, false);
   else if (type == "csc")
     ConvertTxtToBCSC(filePath, linesToSkip);
   else if (type == "wcsr")
-    ConvertTxtToBWCSR(filePath, linesToSkip);
+    ConvertTxtToBCSR(filePath, linesToSkip, true);
   else
     exit(0);
   return 0;

@@ -83,32 +83,12 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
   // Removing static data
   cudaMemset(graph->d_inStatic, 0, *(graph->numVertices) * sizeof(bool));
 
-  GPUAssert(
-      cudaDeviceEnablePeerAccess(1, 0)); // Enable peer access with device 0
-
-  GPUAssert(cudaDeviceEnablePeerAccess(2, 0));
-
-  GPUAssert(cudaDeviceEnablePeerAccess(3, 0));
-
-  graph->h_edges2 =
-      (uint32 *)numa_alloc_onnode(graph->numEdges * sizeof(uint32), 1);
-
-  cudaHostRegister(graph->h_edges2, graph->numEdges * sizeof(uint32),
-                   cudaHostRegisterDefault);
-
-  cudaMemcpy(graph->h_edges2, graph->h_edges,
-             graph->numEdges * sizeof(*graph->h_edges2), cudaMemcpyHostToHost);
-
-  cudaDeviceSynchronize();
-
   uint64 totalNumFilterPartitions = 0;
 
   std::cout << "Starting Traversals" << std::endl;
   for (int test = 0; test < nRuns; test++) {
 
     graph->ResetFrontierNValues();
-
-    // graph->SetFrontierToRatio(0.10f);
 
     *(graph->frontierSize) = thrust::reduce(
         graph->thrustFrontier, graph->thrustFrontier + *(graph->numVertices), 0,
@@ -117,7 +97,7 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
     totalProcess.startRecord();
     while (*(graph->frontierSize)) {
 
-      std::cout << "Frontier size: " << *graph->frontierSize << std::endl;
+      // std::cout << "Frontier size: " << *graph->frontierSize << std::endl;
 
       setStaticNDemandFrontiers<<<staticGrid, blockDim, 0, frontierStream>>>(
           graph->numVertices, graph->d_frontier, graph->d_staticFrontier,
@@ -131,7 +111,7 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
                          graph->thurstStaticFrontier + *(graph->numVertices), 0,
                          thrust::plus<uint32>());
 
-      if (*graph->frontierSize > 20000000) {
+      if (*graph->frontierSize > 10 * graph->avgVertPerPart) {
         CalculateActiveEdgesPerPartition<uint32>
             <<<staticGrid, blockDim, 0, demandStream>>>(
                 graph->numPartitions, graph->d_partitionsOffsets,
@@ -206,7 +186,7 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
             graph->d_inStatic);
       }
 
-      if (*graph->frontierSize > 20000000) {
+      if (*graph->frontierSize > 10 * graph->avgVertPerPart) {
         uint32 numPartitionsOnTarget = 0;
         uint32 numPartitionsOnNeighbors = 0;
 
@@ -220,7 +200,7 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
         for (uint32 partition = 0; partition < *graph->numPartitions;
              partition++) {
 
-          if (graph->h_partitionCost[partition] <= FILTER_THRESHOLD)
+          if (graph->h_partitionCost[partition] <= graph->h_filterThreshold)
             continue;
 
           partitionList.push_back(partition);
@@ -301,7 +281,7 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
             // We can prob allocate this data in the other numa node too
             cudaMemcpyAsync(&graph->d_nPartList[gpu][neighborStream],
                             graph->h_nPartList[gpu] + neighborStream,
-                            sizeof(*graph->h_neighborPartitionList),
+                            sizeof(**graph->h_nPartList),
                             cudaMemcpyHostToDevice,
                             neighborMemCpyStreams[gpu][neighborStream]);
 
@@ -380,6 +360,7 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
           cudaStreamSynchronize(streams[tStream]);
           targetGPUQueue.pop();
           numPartitionsOnTarget++;
+
           k0.startRecord();
           PR32_Filter_Kernel<<<staticGrid, blockDim, 0, streams[tStream]>>>(
               &graph->d_partitionList[tStream], graph->d_partitionsOffsets,
@@ -401,6 +382,7 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
 
             cudaSetDevice(0);
             neighborGPUQueues[gpu].pop();
+            numPartitionsOnNeighbors++;
 
             PR32_NeighborFilter_Kernel<<<
                 staticGrid, blockDim, 0,
@@ -448,28 +430,27 @@ void PR32(string filePath, double memAdvise, uint32 nRuns,
   std::cout << "Total amount of data sent with filter: " << MBytes << " MB"
             << std::endl;
 
-  // We're gonna need to compare results now!!
-  cudaMemcpy(graph->h_valuesPR, graph->d_valuesPR,
-             *(graph->numVertices) * sizeof(double), cudaMemcpyDeviceToHost);
+  // cudaMemcpy(graph->h_valuesPR, graph->d_valuesPR,
+  //            *(graph->numVertices) * sizeof(double), cudaMemcpyDeviceToHost);
+  //
+  // cudaDeviceSynchronize();
+  // for (uint32 i = 0; i < 10; i++)
+  //   std::cout << "Our result: " << graph->h_valuesPR[i] << std::endl;
+  //
+  // std::string filepath = "results/values1.bin";
+  //
+  // std::ofstream file(filepath);
+  // if (!file.is_open())
+  //   return;
+  //
+  // // Write values
+  // for (uint64 i = 0; i < *(graph->numVertices); ++i)
+  //   file.write(reinterpret_cast<const char *>(&graph->h_valuesPR[i]),
+  //              sizeof(double));
+  //
+  // file.close();
 
-  cudaDeviceSynchronize();
-  for (uint32 i = 0; i < 10; i++)
-    std::cout << "Our result: " << graph->h_valuesPR[i] << std::endl;
-
-  std::string filepath = "results/values1.bin";
-
-  std::ofstream file(filepath);
-  if (!file.is_open())
-    return;
-
-  // Write values
-  for (uint64 i = 0; i < *(graph->numVertices); ++i)
-    file.write(reinterpret_cast<const char *>(&graph->h_valuesPR[i]),
-               sizeof(double));
-
-  file.close();
-
-  // graph->DumpValues();
+  graph->DumpValues();
   return;
 }
 

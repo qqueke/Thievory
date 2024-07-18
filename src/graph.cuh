@@ -49,50 +49,30 @@ public:
   float *d_filterPartitionCost; // Device transfer cost for partitions given
                                 // filtering approach
 
-  float *d_partitionCost; // Device transfer cost for partitions
-                          // filtering approach
-
   float *h_partitionCost;
-
-  uint32 *h_partition;
-  uint32 *d_partitionNum;
+  float *d_partitionCost;
 
   EdgeType
       *d_filterEdges[N_FILTER_STREAMS]; // Filter partition to be transferred
   EdgeType *d_filterWeights[N_FILTER_STREAMS]; // Device weights
 
-  EdgeType *d_neighborFilterEdges[N_FILTER_STREAMS];
-
-  EdgeType *d_neighborFilterEdges2[N_FILTER_STREAMS];
-
-  EdgeType *d_neighborFilterEdges3[N_FILTER_STREAMS];
-
   EdgeType ***d_nFilterEdges;
-
   EdgeType ***d_nFilterWeights;
 
-  uint32 *h_filterOffset;
-  uint32 *d_filterOffset;
+  float h_filterThreshold;
 
+  uint32 avgVertPerPart;
+
+  // Partition list
   uint32 *h_partitionList;
-  uint32 *h_neighborPartitionList;
-
-  uint32 *h_neighborPartitionList3;
-  uint32 *h_neighborPartitionList2;
   uint32 *d_partitionList;
-  uint32 *d_neighborPartitionList;
 
-  uint32 *d_neighborPartitionList3;
-  uint32 *d_neighborPartitionList2;
-  bool *h_finished;
-  bool *d_finished;
-
+  // Neighbors partition list
   uint32 **d_nPartList;
   uint32 **h_nPartList;
 
-  uint32 *h_nCoalescedPartitions;
-
-  uint32 *d_nCoalescedPartitions;
+  bool *h_finished;
+  bool *d_finished;
 
   bool *h_inStatic; // Static bitmap
   bool *d_inStatic; // Data in shared memory
@@ -160,6 +140,7 @@ template <class EdgeType> void CSR<EdgeType>::SetFrontierToRatio(float ratio) {
     h_frontier[i] = 0;
   }
 
+  double totalRatio = 0;
   for (uint32 i = 0; i < *numPartitions; i++) {
     const uint64 edgesInCurrentPartition =
         h_offsets[h_partitionsOffsets[i + 1]] -
@@ -171,38 +152,23 @@ template <class EdgeType> void CSR<EdgeType>::SetFrontierToRatio(float ratio) {
     const uint64 end = h_partitionsOffsets[i + 1];
 
     const uint64 minDesiredEdges = ratio * edgesInCurrentPartition;
-    const uint64 maxDesiredEdges = (ratio + 0.09f) * edgesInCurrentPartition;
+    const uint64 maxDesiredEdges = (ratio + 0.05f) * edgesInCurrentPartition;
     //
     // std::cout << "Min edges: " << minDesiredEdges
     //           << " Max Edges: " << maxDesiredEdges << std::endl;
 
-    uint64 totalEdges = 0;
-    for (uint32 vertexId = start; vertexId < end; vertexId++) {
-
+    double partRatio = 0;
+    for (uint32 vertexId = start; vertexId < end - 14000; vertexId++) {
       uint64 newEdges = h_offsets[vertexId + 1] - h_offsets[vertexId];
-
-      if (totalEdges + newEdges > maxDesiredEdges) {
-        // Restart from start+1
-        frontierList.clear();
-        vertexId = start;
-        totalEdges = 0;
-
-      } else if (totalEdges + newEdges >= minDesiredEdges) {
-        // We're done
-        frontierList.push_back(vertexId);
-        break;
-      } else {
-        frontierList.push_back(vertexId);
-      }
+      partRatio += newEdges;
     }
 
-    if (frontierList.size() == 0)
-      std::cout << "We have a problem" << std::endl;
-
-    for (uint32 j = 0; j < frontierList.size(); j++) {
-      h_frontier[frontierList[j]] = 1;
-    }
+    partRatio /= edgesInCurrentPartition;
+    totalRatio += partRatio;
   }
+  totalRatio /= *numPartitions;
+
+  std::cout << "Avg partition ratio: " << totalRatio * 100 << std::endl;
 
   return;
 }
@@ -271,12 +237,6 @@ template <class EdgeType> void CSR<EdgeType>::SetPartitionsConfig() {
   std::cout << "Maximum number of edges per partition: " << maxEdgesInPartition
             << std::endl;
   std::cout << "Number of partitions: " << *numPartitions << std::endl;
-
-  cudaHostAlloc((void **)&h_partition, *numPartitions * sizeof(*h_partition),
-                cudaHostAllocDefault);
-
-  for (uint32 i = 0; i < *numPartitions; i++)
-    h_partition[i] = i;
 
   h_partitionsOffsets = new uint32[*numPartitions + 1];
   h_partitionsOffsets[0] = 0;
@@ -350,7 +310,50 @@ void CSR<EdgeType>::InitData(uint64 sourceVertex, uint32 numberNGPUs) {
   process.startRecord();
 
   srcVertex = sourceVertex;
+
   nNGPUs = numberNGPUs;
+
+  if (nNGPUs == 0)
+    h_filterThreshold = 0.77;
+  else if (nNGPUs == 1) {
+    GPUAssert(cudaDeviceEnablePeerAccess(1, 0));
+    h_filterThreshold = 0.45;
+  } else if (nNGPUs == 2) {
+    GPUAssert(cudaDeviceEnablePeerAccess(2, 0));
+    h_filterThreshold = 0.30;
+  } else if (nNGPUs == 3) {
+    GPUAssert(cudaDeviceEnablePeerAccess(3, 0));
+    h_filterThreshold = 0.20;
+  }
+
+  // Copy the filter threshold to constant memory
+  cudaMemcpyToSymbol(d_filterThreshold, &h_filterThreshold,
+                     sizeof(h_filterThreshold));
+
+  // Allocate data in the second Numa Node
+  if (nNGPUs > 1) {
+
+    h_edges2 = (uint32 *)numa_alloc_onnode(numEdges * sizeof(uint32), 1);
+
+    cudaHostRegister(h_edges2, numEdges * sizeof(uint32),
+                     cudaHostRegisterDefault);
+
+    cudaMemcpy(h_edges2, h_edges, numEdges * sizeof(*h_edges2),
+               cudaMemcpyHostToHost);
+
+    if (algorithm == SSSP) {
+      h_weights2 =
+          (uint32 *)numa_alloc_onnode(numEdges * sizeof(*h_weights2), 1);
+
+      cudaHostRegister(h_weights2, numEdges * sizeof(*h_weights2),
+                       cudaHostRegisterDefault);
+
+      cudaMemcpy(h_weights2, h_weights, numEdges * sizeof(*h_weights2),
+                 cudaMemcpyHostToHost);
+    }
+
+    cudaDeviceSynchronize();
+  }
 
   if (algorithm == PR)
     h_valuesPR = new double[*numVertices];
@@ -376,22 +379,6 @@ void CSR<EdgeType>::InitData(uint64 sourceVertex, uint32 numberNGPUs) {
                           cudaHostAllocDefault));
 
   GPUAssert(cudaMalloc(&d_finished, sizeof(*d_finished)));
-
-  GPUAssert(cudaHostAlloc((void **)&h_nCoalescedPartitions,
-                          sizeof(*h_nCoalescedPartitions),
-                          cudaHostAllocDefault));
-
-  GPUAssert(
-      cudaMalloc(&d_nCoalescedPartitions, sizeof(*d_nCoalescedPartitions)));
-
-  GPUAssert(cudaHostAlloc((void **)&h_filterOffset,
-                          N_FILTER_STREAMS * sizeof(*h_filterOffset),
-                          cudaHostAllocDefault));
-
-  // GPUAssert(cudaMalloc(&d_filterOffset, sizeof(*d_filterOffset)));
-
-  GPUAssert(
-      cudaMalloc(&d_filterOffset, N_FILTER_STREAMS * sizeof(*d_filterOffset)));
 
   // *h_finished = 0;
   *frontierSize = 0;
@@ -444,18 +431,6 @@ void CSR<EdgeType>::InitData(uint64 sourceVertex, uint32 numberNGPUs) {
       cudaMalloc(&d_filterFrontier, *numVertices * sizeof(*d_filterFrontier)));
   GPUAssert(cudaMemset(d_filterFrontier, 0,
                        *numVertices * sizeof(*d_filterFrontier)));
-
-  // Filter Frontier Array
-  //  GPUAssert(
-  //      cudaMalloc(&d_filterFrontier, *numVertices *
-  //      sizeof(*d_filterFrontier)));
-  //  GPUAssert(cudaMemset(d_filterFrontier, 0,
-  //                       *numVertices * sizeof(*d_filterFrontier)));
-  //
-  //  GPUAssert(
-  //      cudaMalloc(&d_partitionNum, N_FILTER_STREAMS *
-  //      sizeof(*d_partitionNum)));
-  //
 
   // Mostly Values Array
   if (algorithm == PR) {
@@ -622,6 +597,7 @@ void CSR<EdgeType>::InitData(uint64 sourceVertex, uint32 numberNGPUs) {
 
   GPUAssert(cudaPeekAtLastError());
 
+  avgVertPerPart = (double)*numVertices / *numPartitions;
   process.endRecord();
   process.print();
 
@@ -720,15 +696,31 @@ void CSR<EdgeType>::ReadInputFile(const std::string &filePath,
 }
 
 template <class EdgeType> void CSR<EdgeType>::DumpValues() {
-  std::string filepath = "results/values1.bin";
+
+  if (algorithm == PR)
+    cudaMemcpy(h_valuesPR, d_valuesPR, *(numVertices) * sizeof(*h_valuesPR),
+               cudaMemcpyDeviceToHost);
+  else
+    cudaMemcpy(h_values, d_values, *(numVertices) * sizeof(*h_values),
+               cudaMemcpyDeviceToHost);
+
+  cudaDeviceSynchronize();
+
+  std::string filepath = "results/values.bin";
 
   std::ofstream file(filepath);
   if (!file.is_open())
     return;
 
-  // Write values
-  for (EdgeType i = 0; i < *numVertices; ++i)
-    file.write(reinterpret_cast<const char *>(&h_values[i]), sizeof(EdgeType));
+  if (algorithm == PR) {
+    for (EdgeType i = 0; i < *numVertices; ++i)
+      file.write(reinterpret_cast<const char *>(&h_valuesPR[i]),
+                 sizeof(*h_valuesPR));
+  } else {
+    for (EdgeType i = 0; i < *numVertices; ++i)
+      file.write(reinterpret_cast<const char *>(&h_values[i]),
+                 sizeof(*h_values));
+  }
 
   file.close();
 }
