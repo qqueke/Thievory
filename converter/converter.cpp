@@ -217,15 +217,8 @@ void ConvertTxtToBCSR(std::string filePath, uint32 linesToSkip,
 
   std::sort(edgesVector.begin(), edgesVector.end());
 
-  for (uint64 i = 0; i < edgesVector.size(); ++i) {
+  for (uint64 i = 0; i < edgesVector.size(); i++)
     edges[i] = edgesVector[i].dest;
-
-#ifdef WEIGHTED
-    weights[i] = edgesVector[i].weight;
-#else
-    weights[i] = 20;
-#endif
-  }
 
   if (!liberator) {
     // Hard coded to extract the .txt and put it as bcsr (Byte CSR)
@@ -237,6 +230,14 @@ void ConvertTxtToBCSR(std::string filePath, uint32 linesToSkip,
       exit(0);
     }
 
+    std::vector<uint32> edgesThievory;
+
+    std::vector<uint32> weightsThievory;
+    for (unsigned long long i = 0; i < numEdges; i++) {
+      edgesThievory.push_back({(uint32)edges[i]});
+      weightsThievory.push_back({20});
+    }
+
     // First the header (numVertices and numEdges)
     outfile.write((char *)&numVertices, sizeof(numVertices));
     outfile.write((char *)&numEdges, sizeof(numEdges));
@@ -245,10 +246,11 @@ void ConvertTxtToBCSR(std::string filePath, uint32 linesToSkip,
     outfile.write((char *)offsets, numVertices * sizeof(*offsets));
 
     // Then the edges array
-    outfile.write((char *)edges, numEdges * sizeof(*edges));
+    outfile.write(reinterpret_cast<const char *>(edgesThievory.data()),
+                  edgesThievory.size() * sizeof(uint32));
 
-    // Finally the weights
-    outfile.write((char *)weights, numEdges * sizeof(*weights));
+    outfile.write(reinterpret_cast<const char *>(weightsThievory.data()),
+                  weightsThievory.size() * sizeof(uint32));
 
     outfile.close();
   } else {
