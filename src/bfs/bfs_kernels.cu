@@ -342,3 +342,60 @@ __global__ void BFS32_NeighborFilter_Kernel(const uint32 *partitionList,
     }
   }
 }
+
+__global__ void BFS32_Static_Filter_Kernel(const uint32 *partitionList,
+                                           uint32 *d_partitionsOffsets,
+                                           uint32 *d_values, bool *d_frontier,
+                                           const uint32 *d_filterEdges,
+                                           const uint64 *d_offsets,
+                                           bool *d_filterFrontier) {
+
+  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
+  // const uint32 tid = blockDim.x * THREADS_PER_BLOCK * blockIdx.y +
+  //                    blockDim.x * blockIdx.x + threadIdx.x;
+
+  uint32 warpIdx = tid >> WARP_SHIFT;
+  const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
+  const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
+
+  uint32 partition = partitionList[0];
+  // uint32 touch;
+  //  Start Edge
+  // uint32 startEdge = d_offsets[d_partitionsOffsets[partition]];
+
+  // End Edge
+  // uint32 endEdge = d_offsets[d_partitionsOffsets[partition + 1]];
+
+  // uint32 edgeCount = endEdge - startEdge;
+  // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
+  // dimension
+  for (warpIdx += d_partitionsOffsets[partition];
+       warpIdx < d_partitionsOffsets[partition + 1]; warpIdx += numWarps) {
+    // Start offset
+    // d_partitionsOffsets[partition]
+
+    // End offset
+    // d_partitionsOffsets[partition + 1]
+
+    if (!d_filterFrontier[warpIdx])
+      continue;
+
+    d_filterFrontier[warpIdx] = 0;
+
+    uint32 newValue = d_values[warpIdx] + 1;
+
+    const uint64 start = d_offsets[warpIdx];
+    const uint64 end = d_offsets[warpIdx + 1];
+
+    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
+      uint32 neighborId = d_filterEdges[i];
+
+      // If this new path has lower cost than the previous then change and add
+      // the neighbor to the frontier
+      if (newValue < d_values[neighborId]) {
+        atomicMin(&d_values[neighborId], newValue);
+        d_frontier[neighborId] = 1;
+      }
+    }
+  }
+}

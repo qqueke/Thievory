@@ -36,4 +36,9 @@ __global__ void SSSP32_NeighborFilter_Kernel(
     bool *d_frontier, const uint32 *d_filterEdges, const uint64 *d_offsets,
     bool *d_filterFrontier, const uint32 *d_filterWeights);
 
+__global__ void SSSP32_Static_Filter_Kernel(
+    const uint32 *partitionList, uint32 *d_partitionsOffsets, uint32 *d_values,
+    bool *d_frontier, const uint32 *d_filterEdges, const uint64 *d_offsets,
+    bool *d_filterFrontier, const uint32 *d_filterWeights);
+
 #endif

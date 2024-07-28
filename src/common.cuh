@@ -12,10 +12,8 @@
 #include <thrust/sort.h>
 
 // Utilities
-#include <string>
-
-// ???????
 #include <cmath>
+#include <string>
 
 typedef unsigned int uint32;       // 4 byte data type
 typedef unsigned long long uint64; // 8 byte data type
@@ -38,28 +36,17 @@ typedef unsigned long long uint64; // 8 byte data type
 #define PARTITION_SIZE_64 4194304     // Partition size for 8 byte data (32 MB)
 
 // #define PARTITION_SIZE_MB 33554432
-//   #define PARTITION_SIZE_MB 67108864
+// #define PARTITION_SIZE_MB 67108864
 #define PARTITION_SIZE_MB 16777216
-
 // #define EDGES_IN_PARTITION 8388608 // 32 MB with 4B edge
 
-// #define EDGES_IN_PARTITION 67108864 // 256MB with 4B edge
-// #define EDGES_IN_PARTITION 134217728 * 2 // 1GB with 4B edge
-// #define EDGES_IN_PARTITION 134217728 // 512MB with 4B edge
-
-// #define EDGES_IN_PARTITION 4194304 // 16 MB with 4B edge
-
 #define EDGES_IN_PARTITION 134217728 + 67108864 // 768MB with 4B edge
-//  Our partition sizes should amount to 256MB
 
-#define N_COALESCED_PARTITIONS 4 // Number of partitions that can be coalesced
-
-#define N_FILTER_STREAMS 128
+#define N_FILTER_STREAMS 80
+#define N_TARGET_FILTER_STREAMS 24
 
 #define TOLERANCE 0.001f // Page Rank Specific
 #define ALPHA 0.85f      // Page Rank Specific
-
-#define FILTER_THRESHOLD 0.01f
 
 #define GPUAssert(ans)                                                         \
   { gpuAssert((ans), __FILE__, __LINE__); }
@@ -67,13 +54,18 @@ typedef unsigned long long uint64; // 8 byte data type
 inline void gpuAssert(cudaError_t code, const char *file, int line,
                       bool abort = true) {
   if (code != cudaSuccess) {
-    fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file,
+    fprintf(stderr, "GPUAssert: %s %s %d\n", cudaGetErrorString(code), file,
             line);
     if (abort)
       exit(code);
   }
 }
 enum ALGORITHM_TYPE { BFS, SSSP, CC, PR };
+
+struct Transfer {
+  uint32 stream;
+  uint32 engine;
+};
 
 __constant__ float d_filterThreshold;
 

@@ -37,4 +37,11 @@ __global__ void CC32_NeighborFilter_Kernel(const uint32 *partitionList,
                                            const uint64 *d_offsets,
                                            bool *d_filterFrontier);
 
+__global__ void CC32_Static_Filter_Kernel(const uint32 *partitionList,
+                                          uint32 *d_partitionsOffsets,
+                                          uint32 *d_values, bool *d_frontier,
+                                          const uint32 *d_filterEdges,
+                                          const uint64 *d_offsets,
+                                          bool *d_filterFrontier);
+
 #endif

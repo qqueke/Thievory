@@ -50,6 +50,25 @@ int main(int argc, char **argv) {
   numa_run_on_node(0);
   std::cout << "Selected device " << device << std::endl;
 
+  size_t totalMemory;
+  size_t availMemory;
+  cudaMemGetInfo(&availMemory, &totalMemory);
+
+  printf("Free memory: %lu \n", availMemory);
+
+  size_t newFreeMemory = 20ULL * 1024 * 1024 * 1024;
+
+  size_t allocSize = availMemory - newFreeMemory;
+
+  void *d_ptr;
+  cudaMalloc(&d_ptr, allocSize);
+
+  cudaMemGetInfo(&availMemory, &totalMemory);
+
+  printf("New free memory: %lu \n", availMemory);
+
+  cudaMemGetInfo(&availMemory, &totalMemory);
+
   // Default parameters
   string filePath;
   bool hasInput = false;
@@ -120,14 +139,16 @@ int main(int argc, char **argv) {
       usage(argv[0]);
   } else if (algorithm == "pr") {
     if (type == _4BYTE)
-      PR32(filePath, memAdvise, nRuns, nNGPUs);
+      PR32_PUSH(filePath, memAdvise, nRuns, nNGPUs);
 
     else if (type == _8BYTE)
-      PR64(filePath, memAdvise, nRuns);
+      PR32(filePath, memAdvise, nRuns, nNGPUs);
     else
       usage(argv[0]);
   } else
     usage(argv[0]);
+
+  cudaFree(d_ptr);
 
   return 0;
 }

@@ -7,7 +7,7 @@
 #include <vector>
 
 // #define WEIGHTED 0
-// #define UNDIRECTED
+#define UNDIRECTED
 typedef unsigned int uint32;
 typedef unsigned long long uint64;
 
@@ -34,8 +34,35 @@ struct Edge {
   }
 };
 
-void ConvertTxtToBCSC(std::string filePath, uint32 linesToSkip) {
-  std::cout << "Converting to CSC" << std::endl;
+void writeToFile(const std::string &filename, uint64 numElements,
+                 const void *data, size_t elementSize) {
+  std::ofstream outFile(filename, std::ios::binary);
+
+  if (!outFile) {
+    std::cerr << "Error opening file: " << filename << std::endl;
+    return;
+  }
+
+  // Write the header
+  outFile.write(reinterpret_cast<const char *>(&numElements), sizeof(uint64));
+  uint64 placeholder = 0;
+  outFile.write(reinterpret_cast<const char *>(&placeholder), sizeof(uint64));
+
+  // Write the data
+  outFile.write(reinterpret_cast<const char *>(data),
+                numElements * elementSize);
+
+  outFile.close();
+}
+
+std::string getOutputFilePath(const std::string &basePath,
+                              const std::string &extension) {
+  size_t lastDot = basePath.find_last_of(".");
+  std::string newPath = basePath.substr(0, lastDot) + extension;
+  return newPath;
+}
+
+void ConvertTxtToHWEL(std::string filePath, uint32 linesToSkip) {
   std::string line;
 
   std::ifstream infile;
@@ -50,7 +77,229 @@ void ConvertTxtToBCSC(std::string filePath, uint32 linesToSkip) {
     getline(infile, line);
 
   uint64 numVertices = 0, numEdges = 0;
-  uint64 src = 0, dest = 0, weight = 0;
+  uint64 src = 0, dest = 0, weight = 20;
+
+  std::vector<Edge> edgesVector;
+
+  std::stringstream ss;
+
+  while (getline(infile, line)) {
+    ss.str("");
+    ss.clear();
+    ss << line;
+    ss >> src;
+    ss >> dest;
+
+#ifdef WEIGHTED
+    ss >> weight;
+#endif
+    edgesVector.emplace_back(src, dest, weight);
+
+#ifdef UNDIRECTED
+    edgesVector.emplace_back(dest, src, weight);
+#endif
+
+    // Acquire the number of vertices
+    if (numVertices < src)
+      numVertices = src;
+
+    if (numVertices < dest)
+      numVertices = dest;
+  }
+
+  infile.close();
+
+  // Sort according to destiny
+  std::sort(edgesVector.begin(), edgesVector.end(),
+            [](const Edge &a, const Edge &b) {
+              if (a.dest == b.dest)
+                return a.src < b.src;
+              else
+                return a.dest < b.dest;
+            });
+
+  std::ofstream outfile(filePath.substr(0, filePath.length() - 3) + "el");
+
+  if (!outfile.is_open()) {
+    std::cerr << "Failed to open file to write " << std::endl;
+    return;
+  }
+
+  for (const auto &edge : edgesVector) {
+    outfile << edge.src << "\t" << edge.dest << "\t" << edge.weight << "\n";
+  }
+
+  outfile.close();
+  if (!outfile)
+    std::cerr << "Error occurred when writing to file: " << std::endl;
+
+  return;
+}
+
+void ConvertTxtToWEL(std::string filePath, uint32 linesToSkip) {
+  std::string line;
+
+  std::ifstream infile;
+  infile.open(filePath);
+
+  if (!infile.is_open()) {
+    std::cerr << "Error opening file for reading." << std::endl;
+    exit(0);
+  }
+
+  for (uint32 i = 0; i < linesToSkip; ++i)
+    getline(infile, line);
+
+  uint64 numVertices = 0, numEdges = 0;
+  uint64 src = 0, dest = 0, weight = 20;
+
+  std::vector<Edge> edgesVector;
+
+  std::stringstream ss;
+
+  while (getline(infile, line)) {
+    ss.str("");
+    ss.clear();
+    ss << line;
+    ss >> src;
+    ss >> dest;
+
+#ifdef WEIGHTED
+    ss >> weight;
+#endif
+    edgesVector.emplace_back(src, dest, weight);
+
+#ifdef UNDIRECTED
+    edgesVector.emplace_back(dest, src, weight);
+#endif
+
+    // Acquire the number of vertices
+    if (numVertices < src)
+      numVertices = src;
+
+    if (numVertices < dest)
+      numVertices = dest;
+  }
+
+  infile.close();
+
+  // Sort according to destiny
+  std::sort(edgesVector.begin(), edgesVector.end(),
+            [](const Edge &a, const Edge &b) {
+              if (a.dest == b.dest)
+                return a.src < b.src;
+              else
+                return a.dest < b.dest;
+            });
+
+  std::ofstream outfile(filePath.substr(0, filePath.length() - 3) + "el");
+
+  if (!outfile.is_open()) {
+    std::cerr << "Failed to open file to write " << std::endl;
+    return;
+  }
+
+  for (const auto &edge : edgesVector) {
+    outfile << edge.src << " " << edge.dest << "\n";
+  }
+
+  outfile.close();
+  if (!outfile)
+    std::cerr << "Error occurred when writing to file: " << std::endl;
+
+  return;
+}
+
+void ConvertTxtToEL(std::string filePath, uint32 linesToSkip) {
+  std::string line;
+
+  std::ifstream infile;
+  infile.open(filePath);
+
+  if (!infile.is_open()) {
+    std::cerr << "Error opening file for reading." << std::endl;
+    exit(0);
+  }
+
+  for (uint32 i = 0; i < linesToSkip; ++i)
+    getline(infile, line);
+
+  uint64 numVertices = 0, numEdges = 0;
+  uint64 src = 0, dest = 0, weight = 20;
+
+  std::vector<Edge> edgesVector;
+
+  std::stringstream ss;
+
+  while (getline(infile, line)) {
+    ss.str("");
+    ss.clear();
+    ss << line;
+    ss >> src;
+    ss >> dest;
+
+#ifdef WEIGHTED
+    ss >> weight;
+#endif
+    edgesVector.emplace_back(src, dest, weight);
+
+#ifdef UNDIRECTED
+    edgesVector.emplace_back(dest, src, weight);
+#endif
+
+    // Acquire the number of vertices
+    if (numVertices < src)
+      numVertices = src;
+
+    if (numVertices < dest)
+      numVertices = dest;
+  }
+
+  infile.close();
+
+  // Sort according to destiny
+  std::sort(edgesVector.begin(), edgesVector.end(),
+            [](const Edge &a, const Edge &b) {
+              if (a.dest == b.dest)
+                return a.src < b.src;
+              else
+                return a.dest < b.dest;
+            });
+
+  std::ofstream outfile(filePath.substr(0, filePath.length() - 3) + "el");
+
+  if (!outfile.is_open()) {
+    std::cerr << "Failed to open file to write " << std::endl;
+    return;
+  }
+
+  for (const auto &edge : edgesVector) {
+    outfile << edge.src << " " << edge.dest << "\n";
+  }
+
+  outfile.close();
+  if (!outfile)
+    std::cerr << "Error occurred when writing to file: " << std::endl;
+
+  return;
+}
+
+void ConvertTxtToBCSC(std::string filePath, uint32 linesToSkip) {
+  std::string line;
+
+  std::ifstream infile;
+  infile.open(filePath);
+
+  if (!infile.is_open()) {
+    std::cerr << "Error opening file for reading." << std::endl;
+    exit(0);
+  }
+
+  for (uint32 i = 0; i < linesToSkip; ++i)
+    getline(infile, line);
+
+  uint64 numVertices = 0, numEdges = 0;
+  uint64 src = 0, dest = 0, weight = 20;
 
   std::vector<Edge> edgesVector;
 
@@ -85,19 +334,16 @@ void ConvertTxtToBCSC(std::string filePath, uint32 linesToSkip) {
   numVertices++; // 0 is included
   numEdges = edgesVector.size();
 
-  uint64 *inDegree = (uint64 *)calloc(numVertices, sizeof(*inDegree));
-
+  std::vector<uint32> inDegree(numVertices, 0);
   for (uint64 i = 0; i < edgesVector.size(); ++i)
     inDegree[edgesVector[i].dest]++;
 
-  uint64 *outDegree = (uint64 *)calloc(numVertices, sizeof(*outDegree));
-
+  std::vector<uint32> outDegree(numVertices, 0);
   for (uint64 i = 0; i < edgesVector.size(); ++i)
     outDegree[edgesVector[i].src]++;
 
-  uint64 *offsets = (uint64 *)calloc(numVertices, sizeof(*offsets));
-  uint64 *edges = (uint64 *)calloc(numEdges, sizeof(*edges));
-  // uint64 *weights = (uint64 *)calloc(numEdges, sizeof(*weights));
+  std::vector<uint64> offsets(numVertices, 0);
+  std::vector<uint32> edges(numEdges, 0);
 
   uint64 temp = 0;
   for (uint64 i = 0; i < numVertices; i++) {
@@ -114,14 +360,8 @@ void ConvertTxtToBCSC(std::string filePath, uint32 linesToSkip) {
                 return a.dest < b.dest;
             });
 
-  for (uint64 i = 0; i < edgesVector.size(); ++i) {
-    edges[i] = edgesVector[i].src;
-
-    // #ifdef WEIGHTED
-    //         weights[i] = edgesVector[i].weight;
-    // #else
-    //         weights[i] = 20;
-    // #endif
+  for (uint64 i = 0; i < numEdges; i++) {
+    edges[i] = (uint32)edgesVector[i].src;
   }
 
   // Hard coded to extract the .txt and put it as bcsr (Byte CSR)
@@ -133,23 +373,25 @@ void ConvertTxtToBCSC(std::string filePath, uint32 linesToSkip) {
     exit(0);
   }
 
-  // First the header (numVertices and numEdges)
-  outfile.write((char *)&numVertices, sizeof(numVertices));
-  outfile.write((char *)&numEdges, sizeof(numEdges));
-  // Offsets, Edges, OutDegree (uint64)
-  outfile.write((char *)offsets, numVertices * sizeof(*offsets));
-  outfile.write((char *)edges, numEdges * sizeof(*edges));
-  outfile.write((char *)outDegree, numVertices * sizeof(*outDegree));
+  // Header
+  outfile.write((char *)&numVertices, sizeof(uint64));
+  outfile.write((char *)&numEdges, sizeof(uint64));
+
+  // Data
+  outfile.write(reinterpret_cast<const char *>(offsets.data()),
+                offsets.size() * sizeof(uint64));
+
+  outfile.write(reinterpret_cast<const char *>(edges.data()),
+                edges.size() * sizeof(uint32));
+
+  outfile.write(reinterpret_cast<const char *>(outDegree.data()),
+                outDegree.size() * sizeof(uint32));
 
   outfile.close();
 
   return;
 }
-
-void ConvertTxtToBCSR(std::string filePath, uint32 linesToSkip,
-                      bool liberator) {
-  std::cout << "Converting to CSR" << std::endl;
-
+void ConvertTxtToEMOGI(std::string filePath, uint32 linesToSkip) {
   std::string line;
 
   std::ifstream infile;
@@ -165,7 +407,7 @@ void ConvertTxtToBCSR(std::string filePath, uint32 linesToSkip,
     getline(infile, line);
 
   uint64 numVertices = 0, numEdges = 0;
-  uint64 src = 0, dest = 0, weight = 0;
+  uint64 src = 0, dest = 0, weight = 20;
 
   std::vector<Edge> edgesVector;
 
@@ -200,14 +442,101 @@ void ConvertTxtToBCSR(std::string filePath, uint32 linesToSkip,
   numVertices++; // 0 is included
   numEdges = edgesVector.size();
 
-  uint64 *degree = (uint64 *)calloc(numVertices, sizeof(*degree));
+  std::vector<uint64> degree(numVertices, 0);
 
   for (uint64 i = 0; i < edgesVector.size(); ++i)
     degree[edgesVector[i].src]++;
 
-  uint64 *offsets = (uint64 *)calloc(numVertices, sizeof(*offsets));
-  uint64 *edges = (uint64 *)calloc(numEdges, sizeof(*edges));
-  uint64 *weights = (uint64 *)calloc(numEdges, sizeof(*weights));
+  std::vector<uint64> offsets(numVertices + 1, 0);
+  std::vector<uint64> edges(numEdges, 0);
+  std::vector<uint32> weights(numEdges, 0);
+
+  uint64 temp = 0;
+  for (uint64 i = 0; i < numVertices; i++) {
+    offsets[i] = temp;
+    temp += degree[i];
+  }
+
+  offsets[numVertices] = numEdges;
+
+  std::sort(edgesVector.begin(), edgesVector.end());
+
+  for (uint64 i = 0; i < edgesVector.size(); i++) {
+    edges[i] = (uint64)edgesVector[i].dest;
+    weights[i] = (uint32)edgesVector[i].weight;
+  }
+
+  std::string colFilePath = getOutputFilePath(filePath, ".bel.col");
+  std::string dstFilePath = getOutputFilePath(filePath, ".bel.dst");
+  std::string valFilePath = getOutputFilePath(filePath, ".bel.val");
+
+  writeToFile(colFilePath, numVertices, offsets.data(), sizeof(uint64));
+  writeToFile(dstFilePath, numEdges, edges.data(), sizeof(uint64));
+  writeToFile(valFilePath, numEdges, weights.data(), sizeof(uint32));
+
+  return;
+}
+
+void ConvertTxtToBCSR(std::string filePath, uint32 linesToSkip,
+                      bool liberator) {
+  std::string line;
+
+  std::ifstream infile;
+  infile.open(filePath);
+
+  if (!infile.is_open()) {
+    std::cerr << "Error opening file for reading: " << strerror(errno)
+              << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
+  for (uint32 i = 0; i < linesToSkip; ++i)
+    getline(infile, line);
+
+  uint64 numVertices = 0, numEdges = 0;
+  uint64 src = 0, dest = 0, weight = 20;
+
+  std::vector<Edge> edgesVector;
+
+  std::stringstream ss;
+
+  while (getline(infile, line)) {
+    ss.str("");
+    ss.clear();
+    ss << line;
+    ss >> src;
+    ss >> dest;
+
+#ifdef WEIGHTED
+    ss >> weight;
+#endif
+    edgesVector.emplace_back(src, dest, weight);
+
+#ifdef UNDIRECTED
+    edgesVector.emplace_back(dest, src, weight);
+#endif
+
+    // Acquire the number of vertices
+    if (numVertices < src)
+      numVertices = src;
+
+    if (numVertices < dest)
+      numVertices = dest;
+  }
+
+  infile.close();
+
+  numVertices++; // 0 is included
+  numEdges = edgesVector.size();
+
+  std::vector<uint64> degree(numVertices, 0);
+
+  for (uint64 i = 0; i < edgesVector.size(); ++i)
+    degree[edgesVector[i].src]++;
+
+  std::vector<uint64> offsets(numVertices, 0);
+  std::vector<uint32> edges(numEdges, 0);
+  std::vector<uint32> weights(numEdges, 0);
 
   uint64 temp = 0;
   for (uint64 i = 0; i < numVertices; i++) {
@@ -217,12 +546,14 @@ void ConvertTxtToBCSR(std::string filePath, uint32 linesToSkip,
 
   std::sort(edgesVector.begin(), edgesVector.end());
 
-  for (uint64 i = 0; i < edgesVector.size(); i++)
-    edges[i] = edgesVector[i].dest;
+  for (uint64 i = 0; i < edgesVector.size(); i++) {
+    edges[i] = (uint32)edgesVector[i].dest;
+    weights[i] = (uint32)edgesVector[i].weight;
+  }
 
   if (!liberator) {
     // Hard coded to extract the .txt and put it as bcsr (Byte CSR)
-    std::ofstream outfile(filePath.substr(0, filePath.length() - 3) + ".csr",
+    std::ofstream outfile(filePath.substr(0, filePath.length() - 3) + "csr",
                           std::ofstream::binary);
 
     if (!outfile.is_open()) {
@@ -230,27 +561,19 @@ void ConvertTxtToBCSR(std::string filePath, uint32 linesToSkip,
       exit(0);
     }
 
-    std::vector<uint32> edgesThievory;
-
-    std::vector<uint32> weightsThievory;
-    for (unsigned long long i = 0; i < numEdges; i++) {
-      edgesThievory.push_back({(uint32)edges[i]});
-      weightsThievory.push_back({20});
-    }
-
-    // First the header (numVertices and numEdges)
+    // Header
     outfile.write((char *)&numVertices, sizeof(numVertices));
     outfile.write((char *)&numEdges, sizeof(numEdges));
 
-    // Then the offsets array
-    outfile.write((char *)offsets, numVertices * sizeof(*offsets));
+    // Data
+    outfile.write(reinterpret_cast<const char *>(offsets.data()),
+                  offsets.size() * sizeof(uint64));
 
-    // Then the edges array
-    outfile.write(reinterpret_cast<const char *>(edgesThievory.data()),
-                  edgesThievory.size() * sizeof(uint32));
+    outfile.write(reinterpret_cast<const char *>(edges.data()),
+                  edges.size() * sizeof(uint32));
 
-    outfile.write(reinterpret_cast<const char *>(weightsThievory.data()),
-                  weightsThievory.size() * sizeof(uint32));
+    outfile.write(reinterpret_cast<const char *>(weights.data()),
+                  weights.size() * sizeof(uint32));
 
     outfile.close();
   } else {
@@ -268,14 +591,15 @@ void ConvertTxtToBCSR(std::string filePath, uint32 linesToSkip,
     outfile.write((char *)&numEdges, sizeof(numEdges));
 
     // Then the offsets array
-    outfile.write((char *)offsets, numVertices * sizeof(*offsets));
+    outfile.write(reinterpret_cast<const char *>(offsets.data()),
+                  offsets.size() * sizeof(uint64));
 
     //  LiberatorEdge *edgesLiberator = new LiberatorEdge[numEdges];
 
     std::vector<LiberatorEdge> edgesLiberator;
 
     for (unsigned long long i = 0; i < numEdges; i++) {
-      edgesLiberator.push_back({(uint32)edges[i], 20});
+      edgesLiberator.push_back({edges[i], weights[i]});
     }
 
     outfile.write(reinterpret_cast<const char *>(edgesLiberator.data()),
@@ -283,109 +607,6 @@ void ConvertTxtToBCSR(std::string filePath, uint32 linesToSkip,
 
     outfile.close();
   }
-
-  return;
-}
-
-// Liberator specific for weights (SSSP)
-void ConvertTxtToBWCSR(std::string filePath, uint32 linesToSkip) {
-  std::cout << "Converting to WCSR" << std::endl;
-
-  std::string line;
-
-  std::ifstream infile;
-  infile.open(filePath);
-
-  if (!infile.is_open()) {
-    std::cerr << "Error opening file for reading." << std::endl;
-    exit(0);
-  }
-
-  for (uint32 i = 0; i < linesToSkip; ++i)
-    getline(infile, line);
-
-  uint64 numVertices = 0, numEdges = 0;
-  uint64 src = 0, dest = 0, weight = 0;
-
-  std::vector<Edge> edgesVector;
-
-  std::stringstream ss;
-
-  while (getline(infile, line)) {
-    ss.str("");
-    ss.clear();
-    ss << line;
-    ss >> src;
-    ss >> dest;
-
-#ifdef WEIGHTED
-    ss >> weight;
-#endif
-    edgesVector.emplace_back(src, dest, weight);
-
-#ifdef UNDIRECTED
-    edgesVector.emplace_back(dest, src, weight);
-#endif
-
-    // Acquire the number of vertices
-    if (numVertices < src)
-      numVertices = src;
-
-    if (numVertices < dest)
-      numVertices = dest;
-  }
-
-  infile.close();
-
-  numVertices++; // 0 is included
-  numEdges = edgesVector.size();
-
-  uint64 *degree = (uint64 *)calloc(numVertices, sizeof(*degree));
-
-  for (uint64 i = 0; i < edgesVector.size(); ++i)
-    degree[edgesVector[i].src]++;
-
-  LiberatorEdge *edges = new LiberatorEdge[numEdges];
-  uint64 *offsets = (uint64 *)calloc(numVertices, sizeof(*offsets));
-
-  uint64 temp = 0;
-  for (uint64 i = 0; i < numVertices; i++) {
-    offsets[i] = temp;
-    temp += degree[i];
-  }
-
-  std::sort(edgesVector.begin(), edgesVector.end());
-
-  for (uint64 i = 0; i < edgesVector.size(); ++i) {
-    edges[i].dest = edgesVector[i].dest;
-
-#ifdef WEIGHTED
-    edges[i].weight[i] = edgesVector[i].weight;
-#else
-    edges[i].weight = 20;
-#endif
-  }
-
-  // Hard coded to extract the .txt and put it as bcsr (Byte CSR)
-  std::ofstream outfile(filePath.substr(0, filePath.length() - 3) + "wcsr",
-                        std::ofstream::binary);
-
-  if (!outfile.is_open()) {
-    std::cerr << "Error opening file for writing." << std::endl;
-    exit(0);
-  }
-
-  // First the header (numVertices and numEdges)
-  outfile.write((char *)&numVertices, sizeof(numVertices));
-  outfile.write((char *)&numEdges, sizeof(numEdges));
-
-  // Then the offsets array
-  outfile.write((char *)offsets, numVertices * sizeof(*offsets));
-
-  // Then the edges array
-  outfile.write((char *)edges, numEdges * sizeof(*edges));
-
-  outfile.close();
 
   return;
 }
@@ -414,13 +635,28 @@ int main(int argc, char **argv) {
     exit(0);
   }
 
-  if (type == "csr")
+  if (type == "csr") {
+    std::cout << "Converting to CSR" << std::endl;
     ConvertTxtToBCSR(filePath, linesToSkip, false);
-  else if (type == "csc")
+  } else if (type == "csc") {
+    std::cout << "Converting to CSC" << std::endl;
     ConvertTxtToBCSC(filePath, linesToSkip);
-  else if (type == "wcsr")
+  } else if (type == "wcsr") {
+    std::cout << "Converting to WCSR" << std::endl;
     ConvertTxtToBCSR(filePath, linesToSkip, true);
-  else
+  } else if (type == "emogi") {
+    std::cout << "Converting to EMOGI" << std::endl;
+    ConvertTxtToEMOGI(filePath, linesToSkip);
+  } else if (type == "subway") {
+    std::cout << "Converting to Subway" << std::endl;
+    ConvertTxtToEL(filePath, linesToSkip);
+  } else if (type == "subwayWeights") {
+    std::cout << "Converting to Subway with Weights" << std::endl;
+    ConvertTxtToWEL(filePath, linesToSkip);
+  } else if (type == "hytgraph") {
+    std::cout << "Converting to HyTGraph" << std::endl;
+    ConvertTxtToHWEL(filePath, linesToSkip);
+  } else
     exit(0);
   return 0;
 }

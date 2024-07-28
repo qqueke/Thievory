@@ -158,7 +158,7 @@ __global__ void PR32_Filter_Kernel(const uint32 *partitionList,
     if (!d_filterFrontier[warpIdx])
       continue;
 
-    // d_filterFrontier[warpIdx] = 0;
+    d_filterFrontier[warpIdx] = 0;
 
     const uint64 start = d_offsets[warpIdx] - startEdge;
     const uint64 end = d_offsets[warpIdx + 1] - startEdge;
@@ -198,7 +198,7 @@ __global__ void PR32_NeighborFilter_Kernel(
     if (!d_filterFrontier[warpIdx])
       continue;
 
-    // d_filterFrontier[warpIdx] = 0;
+    d_filterFrontier[warpIdx] = 0;
 
     const uint64 start = d_offsets[warpIdx] - startEdge;
     const uint64 end = d_offsets[warpIdx + 1] - startEdge;
@@ -314,20 +314,31 @@ PR32_Static_Kernel_PUSH(const uint32 *staticSize, const uint32 *d_staticList,
                         const uint64 *d_offsets, const uint32 *d_staticEdges,
                         bool *d_frontier, const bool *d_inStatic,
                         double *d_delta, double *d_residual) {
-  for (uint32 index = blockIdx.x * blockDim.x + threadIdx.x;
-       index < *staticSize; index += blockDim.x * gridDim.x) {
-    uint32 vertexId = d_staticList[index];
 
-    // Pretty sure we can remove this but lets review it first
-    if (d_inStatic[vertexId]) {
-      // Neighbors to access
-      uint64 startNeighbor = d_offsets[vertexId];
-      uint64 endNeighbor = d_offsets[vertexId + 1];
+  // const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
+  const uint32 tid = blockDim.x * THREADS_PER_BLOCK * blockIdx.y +
+                     blockDim.x * blockIdx.x + threadIdx.x;
 
-      for (uint64 i = startNeighbor; i < endNeighbor; i++) {
-        uint32 neighborId = d_staticEdges[i];
-        atomicAdd(&d_residual[neighborId], d_delta[vertexId]);
-      }
+  uint32 warpIdx = tid >> WARP_SHIFT;
+  const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
+  const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
+
+  // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
+  // dimension
+  for (; warpIdx < *staticSize; warpIdx += numWarps) {
+
+    //
+    // for (uint32 index = blockIdx.x * blockDim.x + threadIdx.x;
+    //      index < *staticSize; index += blockDim.x * gridDim.x) {
+    uint32 vertexId = d_staticList[warpIdx];
+
+    // Neighbors to access
+    uint64 startNeighbor = d_offsets[vertexId];
+    uint64 endNeighbor = d_offsets[vertexId + 1];
+
+    for (uint64 i = startNeighbor + laneIdx; i < endNeighbor; i += WARP_SIZE) {
+      uint32 neighborId = d_staticEdges[i];
+      atomicAdd(&d_residual[neighborId], d_delta[vertexId]);
     }
   }
 }
@@ -351,7 +362,7 @@ __global__ void PR32_Demand_Kernel_PUSH(const uint32 *demandSize,
     uint32 vertexId = d_demandList[traverseIndex];
 
     const uint64 start = d_offsets[vertexId];
-    const uint64 shiftStart = start & MEM_ALIGN_64;
+    const uint64 shiftStart = start & MEM_ALIGN_32;
     const uint64 end = d_offsets[vertexId + 1];
 
     for (uint64 i = shiftStart + laneIdx; i < end; i += WARP_SIZE) {
@@ -360,7 +371,115 @@ __global__ void PR32_Demand_Kernel_PUSH(const uint32 *demandSize,
       if (i >= start)
         atomicAdd(&d_residual[neighborId], d_delta[vertexId]);
     }
-    d_frontier[vertexId] = 0;
+    // d_frontier[vertexId] = 0;
+  }
+}
+
+__global__ void PR32_Filter_Kernel_PUSH(
+    const uint32 *partitionList, uint32 *d_partitionsOffsets, uint32 *d_values,
+    bool *d_frontier, const uint32 *d_filterEdges, const uint64 *d_offsets,
+    bool *d_filterFrontier, double *d_valuesPR, double *d_residual,
+    double *d_delta) {
+
+  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
+  uint32 warpIdx = tid >> WARP_SHIFT;
+  const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
+  const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
+
+  uint32 partition = partitionList[0];
+  //  Start Edge
+  uint32 startEdge = d_offsets[d_partitionsOffsets[partition]];
+
+  // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
+  // dimension
+  for (warpIdx += d_partitionsOffsets[partition];
+       warpIdx < d_partitionsOffsets[partition + 1]; warpIdx += numWarps) {
+
+    if (!d_filterFrontier[warpIdx])
+      continue;
+
+    d_filterFrontier[warpIdx] = 0;
+
+    const uint64 start = d_offsets[warpIdx] - startEdge;
+    const uint64 end = d_offsets[warpIdx + 1] - startEdge;
+
+    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
+      uint32 neighborId = d_filterEdges[i];
+
+      atomicAdd(&d_residual[neighborId], d_delta[warpIdx]);
+    }
+  }
+}
+
+__global__ void PR32_Static_Filter_Kernel_PUSH(
+    const uint32 *partitionList, uint32 *d_partitionsOffsets, uint32 *d_values,
+    bool *d_frontier, const uint32 *d_filterEdges, const uint64 *d_offsets,
+    bool *d_filterFrontier, double *d_valuesPR, double *d_residual,
+    double *d_delta) {
+
+  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
+  uint32 warpIdx = tid >> WARP_SHIFT;
+  const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
+  const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
+
+  uint32 partition = partitionList[0];
+  //  Start Edge
+  // uint32 startEdge = d_offsets[d_partitionsOffsets[partition]];
+
+  // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
+  // dimension
+  for (warpIdx += d_partitionsOffsets[partition];
+       warpIdx < d_partitionsOffsets[partition + 1]; warpIdx += numWarps) {
+
+    if (!d_filterFrontier[warpIdx])
+      continue;
+
+    d_filterFrontier[warpIdx] = 0;
+
+    const uint64 start = d_offsets[warpIdx];
+    const uint64 end = d_offsets[warpIdx + 1];
+
+    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
+      uint32 neighborId = d_filterEdges[i];
+
+      atomicAdd(&d_residual[neighborId], d_delta[warpIdx]);
+    }
+  }
+}
+
+__global__ void PR32_NeighborFilter_Kernel_PUSH(
+    const uint32 *partitionList, uint32 *d_partitionsOffsets, uint32 *d_values,
+    bool *d_frontier, const uint32 *d_filterEdges, const uint64 *d_offsets,
+    bool *d_filterFrontier, double *d_valuesPR, double *d_residual,
+    double *d_delta) {
+
+  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
+  uint32 warpIdx = tid >> WARP_SHIFT;
+  const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
+  const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
+
+  uint32 partition = partitionList[0];
+  //  Start Edge
+  uint32 startEdge = d_offsets[d_partitionsOffsets[partition]];
+
+  // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
+  // dimension
+  for (warpIdx += d_partitionsOffsets[partition];
+       warpIdx < d_partitionsOffsets[partition + 1]; warpIdx += numWarps) {
+
+    if (!d_filterFrontier[warpIdx])
+      continue;
+
+    d_filterFrontier[warpIdx] = 0;
+
+    const uint64 start = d_offsets[warpIdx] - startEdge;
+    const uint64 end = d_offsets[warpIdx + 1] - startEdge;
+
+    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
+      uint32 neighborId = d_filterEdges[i];
+
+      atomicAdd(&d_residual[neighborId], d_delta[warpIdx]);
+    }
   }
 }
 
