@@ -56,12 +56,12 @@ int main(int argc, char **argv) {
 
   printf("Free memory: %lu \n", availMemory);
 
-  size_t newFreeMemory = 20ULL * 1024 * 1024 * 1024;
+  size_t newFreeMemory = 4ULL * 1024 * 1024 * 1024;
 
   size_t allocSize = availMemory - newFreeMemory;
 
   void *d_ptr;
-  cudaMalloc(&d_ptr, allocSize);
+  // cudaMalloc(&d_ptr, allocSize);
 
   cudaMemGetInfo(&availMemory, &totalMemory);
 

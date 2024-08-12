@@ -223,7 +223,21 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
         setStaticList<<<staticGrid, blockDim, 0, staticStream>>>(
             graph->numVertices, graph->d_staticList, graph->d_staticFrontier,
             graph->d_prefixSum);
+      }
 
+      if (*(graph->demandSize) > 0) {
+        // cudaStreamSynchronize(staticStream);
+        thrust::exclusive_scan(
+            graph->thurstDemandFrontier,
+            graph->thurstDemandFrontier + *(graph->numVertices),
+            graph->thurstPrefixSum, 0, thrust::plus<uint32>());
+
+        setDemandList<<<staticGrid, blockDim, 0, demandStream>>>(
+            graph->numVertices, graph->d_demandList, graph->d_demandFrontier,
+            graph->d_prefixSum);
+      }
+
+      if (*(graph->staticSize) > 0) {
         cudaStreamSynchronize(frontierStream);
 
         CC32_Static_Kernel<<<staticGrid, blockDim, 0, staticStream>>>(
@@ -233,15 +247,6 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
       }
 
       if (*(graph->demandSize) > 0) {
-        thrust::exclusive_scan(
-            graph->thurstDemandFrontier,
-            graph->thurstDemandFrontier + *(graph->numVertices),
-            graph->thurstPrefixSum, 0, thrust::plus<uint32>());
-
-        setDemandList<<<staticGrid, blockDim, 0, demandStream>>>(
-            graph->numVertices, graph->d_demandList, graph->d_demandFrontier,
-            graph->d_prefixSum);
-
         uint32 numBlocks =
             (((*(graph->demandSize)) * WARP_SIZE + THREADS_PER_BLOCK) /
              THREADS_PER_BLOCK);
@@ -254,6 +259,50 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
             graph->demandSize, graph->d_demandList, graph->d_values,
             graph->d_frontier, graph->h_edges, graph->d_offsets);
       }
+
+      // if (*(graph->staticSize) > 0) {
+      //   thrust::exclusive_scan(
+      //       graph->thurstStaticFrontier,
+      //       graph->thurstStaticFrontier + *(graph->numVertices),
+      //       graph->thurstPrefixSum, 0, thrust::plus<uint32>());
+      //
+      //   setStaticList<<<staticGrid, blockDim, 0, staticStream>>>(
+      //       graph->numVertices, graph->d_staticList, graph->d_staticFrontier,
+      //       graph->d_prefixSum);
+      //
+      //   cudaStreamSynchronize(frontierStream);
+      //
+      //   CC32_Static_Kernel<<<staticGrid, blockDim, 0, staticStream>>>(
+      //       graph->staticSize, graph->d_staticList, graph->d_offsets,
+      //       graph->d_staticEdges, graph->d_values, graph->d_frontier,
+      //       graph->d_inStatic);
+      // }
+      //
+      // if (*(graph->demandSize) > 0) {
+      //
+      //   cudaStreamSynchronize(staticStream);
+      //   thrust::exclusive_scan(
+      //       graph->thurstDemandFrontier,
+      //       graph->thurstDemandFrontier + *(graph->numVertices),
+      //       graph->thurstPrefixSum, 0, thrust::plus<uint32>());
+      //
+      //   setDemandList<<<staticGrid, blockDim, 0, demandStream>>>(
+      //       graph->numVertices, graph->d_demandList, graph->d_demandFrontier,
+      //       graph->d_prefixSum);
+      //
+      //   uint32 numBlocks =
+      //       (((*(graph->demandSize)) * WARP_SIZE + THREADS_PER_BLOCK) /
+      //        THREADS_PER_BLOCK);
+      //   dim3 gridDim(THREADS_PER_BLOCK,
+      //                (numBlocks + THREADS_PER_BLOCK) / THREADS_PER_BLOCK);
+      //
+      //   cudaStreamSynchronize(frontierStream);
+      //
+      //   cudaStreamSynchronize(staticStream);
+      //   CC32_Demand_Kernel<<<gridDim, blockDim, 0, demandStream>>>(
+      //       graph->demandSize, graph->d_demandList, graph->d_values,
+      //       graph->d_frontier, graph->h_edges, graph->d_offsets);
+      // }
 
       if (*graph->frontierSize > 10 * graph->avgVertPerPart) {
         uint32 numPartitionsOnTarget = 0;
@@ -362,7 +411,8 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
             cudaSetDevice(0);
           }
 
-          while (!targetGPUQueue.empty()) {
+          // while (!targetGPUQueue.empty())
+          {
             uint32 tStream = targetGPUQueue.front();
 
             cudaError_t streamStatus = cudaStreamQuery(streams[tStream]);
@@ -420,7 +470,8 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
 
           for (uint32 gpu = 0; gpu < neighborGPUQueues.size(); gpu++) {
 
-            while (!neighborGPUQueues[gpu].empty()) {
+            // while (!neighborGPUQueues[gpu].empty())
+            {
               uint32 nStream = neighborGPUQueues[gpu].front();
 
               cudaSetDevice(gpu + 1);

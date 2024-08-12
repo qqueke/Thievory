@@ -111,6 +111,8 @@ void BFS32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
                          graph->thurstStaticFrontier + *(graph->numVertices), 0,
                          thrust::plus<uint32>());
 
+      std::cout << "Static size: " << *graph->staticSize << std::endl;
+
       if (*graph->frontierSize > 10 * graph->avgVertPerPart) {
         CalculateActiveEdgesPerPartition<uint32>
             <<<staticGrid, blockDim, 0, demandStream>>>(
@@ -297,7 +299,8 @@ void BFS32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
             cudaSetDevice(0);
           }
 
-          while (!targetGPUQueue.empty()) {
+          // while (!targetGPUQueue.empty())
+          {
             uint32 tStream = targetGPUQueue.front();
 
             cudaError_t streamStatus = cudaStreamQuery(streams[tStream]);
@@ -356,7 +359,8 @@ void BFS32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
 
           for (uint32 gpu = 0; gpu < neighborGPUQueues.size(); gpu++) {
 
-            while (!neighborGPUQueues[gpu].empty()) {
+            // while (!neighborGPUQueues[gpu].empty())
+            {
               uint32 nStream = neighborGPUQueues[gpu].front();
 
               cudaSetDevice(gpu + 1);

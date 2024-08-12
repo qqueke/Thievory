@@ -1,7 +1,6 @@
-datasets/
-bin/
-build/
-cmake/
+datasets/*
+converter/*
+bin/*
 nsys/
 main
 teste

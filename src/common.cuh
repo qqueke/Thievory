@@ -42,7 +42,7 @@ typedef unsigned long long uint64; // 8 byte data type
 
 #define EDGES_IN_PARTITION 134217728 + 67108864 // 768MB with 4B edge
 
-#define N_FILTER_STREAMS 80
+#define N_FILTER_STREAMS 64
 #define N_TARGET_FILTER_STREAMS 24
 
 #define TOLERANCE 0.001f // Page Rank Specific

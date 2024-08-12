@@ -90,4 +90,10 @@ __global__ void PR32_Static_Filter_Kernel_PUSH(
     bool *d_filterFrontier, double *d_valuesPR, double *d_residual,
     double *d_delta);
 
+__global__ void PR32_Static_NeighborFilter_Kernel(
+    const uint32 *partitionList, uint32 *d_partitionsOffsets, uint32 *d_values,
+    bool *d_frontier, const uint32 *d_filterEdges, const uint64 *d_offsets,
+    bool *d_filterFrontier, double *d_valuesPR, uint32 *d_outDegree,
+    double *d_sum);
+
 #endif

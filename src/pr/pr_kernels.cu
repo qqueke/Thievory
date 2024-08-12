@@ -38,28 +38,20 @@ __global__ void PR32_Static_Kernel(const uint32 *staticSize,
   // dimension
   for (; warpIdx < *staticSize; warpIdx += numWarps) {
 
-    // for (uint32 index = blockIdx.x * blockDim.x + threadIdx.x;
-    //      index < *staticSize; index += blockDim.x * gridDim.x) {
     uint32 vertexId = d_staticList[warpIdx];
 
     // Neighbors to access
     uint64 start = d_offsets[vertexId];
     uint64 end = d_offsets[vertexId + 1];
 
-    double tempSum = 0;
-
-    for (uint64 i = start + laneIdx; i < end; i++) {
+    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
       uint32 neighborId = d_staticEdges[i];
 
-      // If this new path has lower cost than the previous then change and add
-      // the neighbor to the frontier
       if (d_outDegree[neighborId] != 0) {
-        double tempValue =
-            d_valuesPR[neighborId] / (double)d_outDegree[neighborId];
-        tempSum += tempValue;
+        double tempValue = d_valuesPR[neighborId] / d_outDegree[neighborId];
+        atomicAdd(&d_sum[vertexId], tempValue);
       }
     }
-    d_sum[vertexId] = tempSum;
   }
 }
 
@@ -89,10 +81,9 @@ __global__ void PR64_Static_Kernel(const uint64 *staticSize,
         if (d_outDegree[neighborId] != 0) {
           double tempValue =
               d_valuesPR[neighborId] / (double)d_outDegree[neighborId];
-          tempSum += tempValue;
+          atomicAdd(&d_sum[vertexId], tempValue);
         }
       }
-      d_sum[vertexId] = tempSum;
     }
   }
 }
@@ -215,6 +206,79 @@ __global__ void PR32_NeighborFilter_Kernel(
   }
 }
 
+__global__ void PR32_Static_NeighborFilter_Kernel(
+    const uint32 *partitionList, uint32 *d_partitionsOffsets, uint32 *d_values,
+    bool *d_frontier, const uint32 *d_filterEdges, const uint64 *d_offsets,
+    bool *d_filterFrontier, double *d_valuesPR, uint32 *d_outDegree,
+    double *d_sum) {
+  {
+
+    const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32 warpIdx = tid >> WARP_SHIFT;
+    const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
+    const uint32 numWarps =
+        gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
+
+    uint32 partition = partitionList[0];
+    //  Start Edge
+
+    // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
+    // dimension
+    for (warpIdx += d_partitionsOffsets[partition];
+         warpIdx < d_partitionsOffsets[partition + 1]; warpIdx += numWarps) {
+
+      if (!d_filterFrontier[warpIdx])
+        continue;
+
+      d_filterFrontier[warpIdx] = 0;
+
+      const uint64 start = d_offsets[warpIdx];
+      const uint64 end = d_offsets[warpIdx + 1];
+
+      for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
+        uint32 neighborId = d_filterEdges[i];
+
+        if (d_outDegree[neighborId] != 0) {
+          double tempValue =
+              d_valuesPR[neighborId] / (double)d_outDegree[neighborId];
+          atomicAdd(&d_sum[warpIdx], tempValue);
+        }
+      }
+    }
+  }
+
+  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
+  uint32 warpIdx = tid >> WARP_SHIFT;
+  const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
+  const uint32 numWarps = gridDim.x * gridDim.y * THREADS_PER_BLOCK / WARP_SIZE;
+
+  uint32 partition = partitionList[0];
+  //  Start Edge
+  // Grid-Stride loop using Warp ID makes it easier to calculate with the .y
+  // dimension
+  for (warpIdx += d_partitionsOffsets[partition];
+       warpIdx < d_partitionsOffsets[partition + 1]; warpIdx += numWarps) {
+
+    if (!d_filterFrontier[warpIdx])
+      continue;
+
+    d_filterFrontier[warpIdx] = 0;
+
+    const uint64 start = d_offsets[warpIdx];
+    const uint64 end = d_offsets[warpIdx + 1];
+
+    for (uint64 i = start + laneIdx; i < end; i += WARP_SIZE) {
+      uint32 neighborId = d_filterEdges[i];
+
+      if (d_outDegree[neighborId] != 0) {
+        double tempValue =
+            d_valuesPR[neighborId] / (double)d_outDegree[neighborId];
+        atomicAdd(&d_sum[warpIdx], tempValue);
+      }
+    }
+  }
+}
+
 __global__ void PR64_Demand_Kernel(const uint64 *demandSize,
                                    const uint64 *d_demandList,
                                    const uint64 *h_edges,
@@ -268,14 +332,14 @@ __global__ void PR32_Update_Values(const uint32 *numVertices,
       d_valuesPR[index] = tempValue;
 
       // Substituir este if else
-      // if (diff > TOLERANCE)
-      //   d_frontier[index] = 1;
-      //
-      // else
-      //   d_frontier[index] = 0;
+      if (diff > TOLERANCE)
+        d_frontier[index] = 1;
 
-      if (diff <= TOLERANCE)
+      else
         d_frontier[index] = 0;
+
+      // if (diff <= TOLERANCE)
+      //   d_frontier[index] = 0;
 
       d_sum[index] = 0;
     }
@@ -315,9 +379,9 @@ PR32_Static_Kernel_PUSH(const uint32 *staticSize, const uint32 *d_staticList,
                         bool *d_frontier, const bool *d_inStatic,
                         double *d_delta, double *d_residual) {
 
-  // const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
-  const uint32 tid = blockDim.x * THREADS_PER_BLOCK * blockIdx.y +
-                     blockDim.x * blockIdx.x + threadIdx.x;
+  const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
+  // const uint32 tid = blockDim.x * THREADS_PER_BLOCK * blockIdx.y +
+  //                    blockDim.x * blockIdx.x + threadIdx.x;
 
   uint32 warpIdx = tid >> WARP_SHIFT;
   const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
@@ -330,6 +394,17 @@ PR32_Static_Kernel_PUSH(const uint32 *staticSize, const uint32 *d_staticList,
     //
     // for (uint32 index = blockIdx.x * blockDim.x + threadIdx.x;
     //      index < *staticSize; index += blockDim.x * gridDim.x) {
+
+    // if (!d_inStatic[warpIdx]) {
+    //   continue;
+    // }
+    //
+    // if (!d_frontier[warpIdx]) {
+    //   continue;
+    // }
+    // uint32 vertexId = warpIdx;
+    // d_frontier[warpIdx] = 0;
+
     uint32 vertexId = d_staticList[warpIdx];
 
     // Neighbors to access

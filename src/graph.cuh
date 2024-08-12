@@ -334,7 +334,7 @@ void CSR<EdgeType>::InitData(uint64 sourceVertex, uint32 numberNGPUs) {
   nNGPUs = numberNGPUs;
 
   if (nNGPUs == 0)
-    h_filterThreshold = 0.77;
+    h_filterThreshold = 0.85;
   else if (nNGPUs == 1) {
     GPUAssert(cudaDeviceEnablePeerAccess(1, 0));
     h_filterThreshold = 0.45;
@@ -458,24 +458,25 @@ void CSR<EdgeType>::InitData(uint64 sourceVertex, uint32 numberNGPUs) {
 
   // Mostly Values Array
   if (algorithm == PR) {
-    // GPUAssert(cudaMalloc(&d_degree, *numVertices * sizeof(*d_degree)));
-    // GPUAssert(cudaMemcpy(d_degree, h_degree, *numVertices *
-    // sizeof(*d_degree),
-    //                      cudaMemcpyHostToDevice));
+
+    // Comment this for push
+    GPUAssert(cudaMalloc(&d_degree, *numVertices * sizeof(*d_degree)));
+    GPUAssert(cudaMemcpy(d_degree, h_degree, *numVertices * sizeof(*d_degree),
+                         cudaMemcpyHostToDevice));
 
     GPUAssert(cudaMalloc(&d_valuesPR, *numVertices * sizeof(*d_valuesPR)));
     GPUAssert(cudaMemcpy(d_valuesPR, h_valuesPR,
                          *numVertices * sizeof(*d_valuesPR),
                          cudaMemcpyHostToDevice));
 
-    GPUAssert(cudaMalloc(&d_delta, (*numVertices + 1) * sizeof(*d_delta)));
-    GPUAssert(
-        cudaMalloc(&d_residual, (*numVertices + 1) * sizeof(*d_residual)));
-
-    // GPUAssert(cudaMalloc(&d_sum, *numVertices * sizeof(*d_sum)));
-    // GPUAssert(cudaMemset(d_sum, 0, *numVertices * sizeof(*d_sum)));
+    // GPUAssert(cudaMalloc(&d_delta, (*numVertices + 1) * sizeof(*d_delta)));
+    // GPUAssert(
+    //     cudaMalloc(&d_residual, (*numVertices + 1) * sizeof(*d_residual)));
     //
-    // d_thurstSum = thrust::device_ptr<double>(d_sum);
+    GPUAssert(cudaMalloc(&d_sum, *numVertices * sizeof(*d_sum)));
+    GPUAssert(cudaMemset(d_sum, 0, *numVertices * sizeof(*d_sum)));
+
+    d_thurstSum = thrust::device_ptr<double>(d_sum);
   } else {
     GPUAssert(cudaMalloc(&d_values, *numVertices * sizeof(*d_values)));
     GPUAssert(cudaMemcpy(d_values, h_values, *numVertices * sizeof(*d_values),
@@ -638,6 +639,19 @@ void CSR<EdgeType>::ReadInputFile(const std::string &filePath,
   infile.read((char *)h_offsets, (*numVertices) * sizeof(uint64));
 
   h_offsets[*numVertices] = numEdges;
+
+  uint32 vertex = 0;
+  uint32 maxNumNeighbors = 0;
+  for (uint32 i = 0; i < *numVertices; i++) {
+    uint32 nNeighbors = h_offsets[i + 1] - h_offsets[i];
+
+    if (nNeighbors > maxNumNeighbors) {
+      maxNumNeighbors = nNeighbors;
+      vertex = i;
+    }
+  }
+
+  std::cout << "Vertex with highest neighbor count: " << vertex << std::endl;
 
   // Allocate h_edges on default Numa Node
   h_edges = (EdgeType *)numa_alloc_onnode(numEdges * sizeof(EdgeType), 0);
