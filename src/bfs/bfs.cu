@@ -5,10 +5,7 @@
 #include <queue>
 #include <vector>
 
-#define N_FILTER_STREAMS2 24
-
-// Test the order between static and demand kernel
-void BFS32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
+void BFS32(string filePath, uint32 srcVertex, uint32 nRuns,
            uint32 nNeighborGPUs) {
 
   numa_run_on_node(0);
@@ -41,9 +38,9 @@ void BFS32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
       GPUAssert(cudaStreamCreate(&neighborComputeStreams[i][j]));
   }
 
-  cudaStream_t streams[N_FILTER_STREAMS2];
+  cudaStream_t streams[N_TARGET_FILTER_STREAMS];
 
-  for (uint32 i = 0; i < N_FILTER_STREAMS2; i++)
+  for (uint32 i = 0; i < N_TARGET_FILTER_STREAMS; i++)
     GPUAssert(cudaStreamCreate(&streams[i]));
 
   graph->InitData(srcVertex, nNeighborGPUs);
@@ -68,18 +65,6 @@ void BFS32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
   auto syncDemandPolicy = thrust::cuda::par.on(demandStream);
 
   TimeRecord<chrono::milliseconds> totalProcess("Total execution");
-  TimeRecord<chrono::milliseconds> test0("Copy to GPU 0");
-  TimeRecord<chrono::milliseconds> test1("Copy to GPU 1");
-  TimeRecord<chrono::milliseconds> test2("Copy to GPU 2");
-  TimeRecord<chrono::milliseconds> test3("Copy to GPU 3");
-
-  TimeRecord<chrono::milliseconds> k0("Kernel GPU 0");
-  TimeRecord<chrono::milliseconds> k1("Kernel GPU 1");
-  TimeRecord<chrono::milliseconds> k2("Kernel GPU 2");
-  TimeRecord<chrono::milliseconds> k3("Kernel GPU 3");
-
-  // Removing static data
-  cudaMemset(graph->d_inStatic, 0, *(graph->numVertices) * sizeof(bool));
 
   uint64 totalNumFilterPartitions = 0;
   std::cout << "Starting Traversals" << std::endl;
@@ -228,14 +213,13 @@ void BFS32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
               graph->h_offsets[graph->h_partitionsOffsets[partition + 1]] -
               start;
 
-          uint32 stream = (index / nGPUs) % N_FILTER_STREAMS2;
+          uint32 stream = (index / nGPUs) % N_TARGET_FILTER_STREAMS;
 
           graph->h_partitionList[stream] = partition;
 
           cudaStreamSynchronize(streams[stream]);
 
           // cudaDeviceSynchronize();
-          test0.startRecord();
           cudaMemcpyAsync(graph->d_filterEdges[stream], &graph->h_edges[start],
                           partitionSize * sizeof(*graph->h_edges),
                           cudaMemcpyHostToDevice, streams[stream]);
@@ -246,7 +230,6 @@ void BFS32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
                           cudaMemcpyHostToDevice, streams[stream]);
 
           //  cudaDeviceSynchronize();
-          test0.endRecord();
 
           targetGPUQueue.push(stream);
 
@@ -275,7 +258,6 @@ void BFS32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
             cudaSetDevice(gpu + 1);
 
             //   cudaDeviceSynchronize();
-            test1.startRecord();
 
             cudaMemcpyAsync(graph->d_nFilterEdges[gpu][neighborStream],
                             (gpu > 0) ? graph->h_edges2 + neighborStart
@@ -292,7 +274,6 @@ void BFS32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
                             neighborMemCpyStreams[gpu][neighborStream]);
 
             //  cudaDeviceSynchronize();
-            test1.endRecord();
 
             neighborGPUQueues[gpu].push(neighborStream);
 
@@ -306,7 +287,7 @@ void BFS32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
             cudaError_t streamStatus = cudaStreamQuery(streams[tStream]);
 
             if (streamStatus == cudaErrorNotReady) {
-              if (targetGPUQueue.size() < N_FILTER_STREAMS2)
+              if (targetGPUQueue.size() < N_TARGET_FILTER_STREAMS)
                 continue;
               else
                 cudaStreamSynchronize(streams[tStream]);
@@ -316,14 +297,12 @@ void BFS32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
             numPartitionsOnTarget++;
 
             //   cudaDeviceSynchronize();
-            k0.startRecord();
             BFS32_Filter_Kernel<<<staticGrid, blockDim, 0, streams[tStream]>>>(
                 &graph->d_partitionList[tStream], graph->d_partitionsOffsets,
                 graph->d_values, graph->d_frontier,
                 graph->d_filterEdges[tStream], graph->d_offsets,
                 graph->d_filterFrontier);
             //       cudaDeviceSynchronize();
-            k0.endRecord();
 
             uint32 processedPartition = graph->h_partitionList[tStream];
 
@@ -440,13 +419,11 @@ void BFS32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
           cudaStreamSynchronize(streams[tStream]);
           targetGPUQueue.pop();
           numPartitionsOnTarget++;
-          k0.startRecord();
           BFS32_Filter_Kernel<<<staticGrid, blockDim, 0, streams[tStream]>>>(
               &graph->d_partitionList[tStream], graph->d_partitionsOffsets,
               graph->d_values, graph->d_frontier, graph->d_filterEdges[tStream],
               graph->d_offsets, graph->d_filterFrontier);
           //   cudaDeviceSynchronize();
-          k0.endRecord();
 
           uint32 processedPartition = graph->h_partitionList[tStream];
 
@@ -586,7 +563,4 @@ void BFS32(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns,
   return;
 }
 
-void BFS64(string filePath, uint32 srcVertex, double memAdvise, uint32 nRuns) {
-
-  return;
-}
+void BFS64(string filePath, uint32 srcVertex, uint32 nRuns) { return; }

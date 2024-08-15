@@ -4,27 +4,29 @@
 #include "../src/sssp/sssp.cuh"
 #include <iostream>
 #include <numa.h>
+
 enum BYTES {
-  _4BYTE = 32,
-  _8BYTE = 64,
+  _4BYTE = 4,
+  _8BYTE = 8,
 };
 
 void usage(const char *program_name) {
-  cout << "Usage: " << program_name
-       << " <inputFile> <numVertices> <n_ignored_lines> [-d] [-w] [-p]" << endl;
+  cout << "Usage: " << program_name << endl;
   cout << "Options:" << endl;
-  cout << "  --input : Specify the graph input " << endl;
+  cout << "  --input : Specify the path to graph input " << endl;
   cout << "  --algo : Specify the algorithm {'bfs', 'cc', 'pr', 'sssp'} "
           "(default = 'bfs')"
        << endl;
-  cout << "  --type : Specify the edge size {32, 64} (default = 32)" << endl;
-  cout << "  --type : Specify the source vertex {0, 1, 2, ...} (default = 1)"
+  cout << "  --edgeSize : Specify the edge size {4, 8} (default = 4)" << endl;
+
+  cout << "  --type : Specify PageRank type {'push', 'pull'} (default = 'push')"
        << endl;
-  cout << "  --runs : Specify the heuristic for memory usage [0.0f - 1.0] "
-          "(default = 0.5f)"
+
+  cout << "  --source : Specify the source vertex {0, 1, 2, ...} (default = 1)"
        << endl;
-  cout << "  --runs : Specify the number of runs {0, 1, 2, ...} (default = 1)"
+  cout << "  --runs : Specify the number of runs {0, 1, 2, ...} (default = 1) "
        << endl;
+
   cout << "  --gpus : Specify the number of NEIGHBOR GPUs {0, 1, 2, ...} "
           "(default = 0)"
        << endl;
@@ -73,9 +75,9 @@ int main(int argc, char **argv) {
   string filePath;
   bool hasInput = false;
   string algorithm = "bfs";
-  uint32 type = _4BYTE;
+  string type = "push";
+  uint32 edgeSize = _4BYTE;
   uint32 srcVertex = 1;
-  double memAdvise = 0.5f;
   uint32 nRuns = 1;
   uint32 nNGPUs = 0;
 
@@ -86,16 +88,12 @@ int main(int argc, char **argv) {
         hasInput = true;
       } else if (strcmp(argv[i], "--algo") == 0)
         algorithm = string(argv[i + 1]);
-
+      else if (strcmp(argv[i], "--edgeSize") == 0)
+        edgeSize = atoi(argv[i + 1]);
       else if (strcmp(argv[i], "--type") == 0)
-        type = atoi(argv[i + 1]);
-
+        type = string(argv[i + 1]);
       else if (strcmp(argv[i], "--source") == 0)
         srcVertex = atoi(argv[i + 1]);
-
-      else if (strcmp(argv[i], "--adviseK") == 0)
-        memAdvise = atof(argv[i + 1]);
-
       else if (strcmp(argv[i], "--runs") == 0)
         nRuns = atoi(argv[i + 1]);
       else if (strcmp(argv[i], "--gpus") == 0)
@@ -109,42 +107,81 @@ int main(int argc, char **argv) {
   if (!hasInput)
     exit(0);
 
-  // Verify if gpus exceeds the total amount of gpus
-
-  std::cout << "Running with " << nNGPUs << " neighbor GPUs" << std::endl;
+  std::cout << "Running " << algorithm << " with edge size of " << edgeSize
+            << "B and using " << nNGPUs << " neighbor GPUs" << std::endl;
 
   if (algorithm == "bfs") {
-    if (type == _4BYTE)
-      BFS32(filePath, srcVertex, memAdvise, nRuns, nNGPUs);
 
-    else if (type == _8BYTE)
-      BFS64(filePath, srcVertex, memAdvise, nRuns);
-    else
+    std::cout << "Source vertex is: " << srcVertex << std::endl;
+
+    if (edgeSize == _4BYTE)
+      BFS32(filePath, srcVertex, nRuns, nNGPUs);
+
+    else if (edgeSize == _8BYTE)
+      BFS64(filePath, srcVertex, nRuns);
+
+    else {
+      cout << "Error: wrong --edgeSize" << endl;
       usage(argv[0]);
+    }
+
   } else if (algorithm == "cc") {
-    if (type == _4BYTE)
-      CC32(filePath, memAdvise, nRuns, nNGPUs);
 
-    else if (type == _8BYTE)
-      CC64(filePath, memAdvise, nRuns);
-    else
+    if (edgeSize == _4BYTE)
+      CC32(filePath, nRuns, nNGPUs);
+
+    else if (edgeSize == _8BYTE)
+      CC64(filePath, nRuns);
+
+    else {
+      cout << "Error: wrong --edgeSize" << endl;
       usage(argv[0]);
+    }
+
   } else if (algorithm == "sssp") {
-    if (type == _4BYTE)
-      SSSP32(filePath, srcVertex, memAdvise, nRuns, nNGPUs);
 
-    else if (type == _8BYTE)
-      SSSP64(filePath, srcVertex, memAdvise, nRuns);
-    else
+    std::cout << "Source vertex is: " << srcVertex << std::endl;
+
+    if (edgeSize == _4BYTE)
+      SSSP32(filePath, srcVertex, nRuns, nNGPUs);
+
+    else if (edgeSize == _8BYTE)
+      SSSP64(filePath, srcVertex, nRuns);
+
+    else {
+      cout << "Error: wrong --edgeSize" << endl;
       usage(argv[0]);
+    }
+
   } else if (algorithm == "pr") {
-    if (type == _4BYTE)
-      PR32_PUSH(filePath, memAdvise, nRuns, nNGPUs);
 
-    else if (type == _8BYTE)
-      PR32(filePath, memAdvise, nRuns, nNGPUs);
-    else
+    if (edgeSize == _4BYTE) {
+      if (type == "push") {
+
+        std::cout << "Running PageRank Push Implementation" << std::endl;
+        PR32_PUSH(filePath, nRuns, nNGPUs);
+      }
+
+      else if (type == "pull") {
+        std::cout << "Running PageRank Pull Implementation" << std::endl;
+        PR32(filePath, nRuns, nNGPUs);
+      }
+
+      else {
+        cout << "Error: wrong --type" << endl;
+        usage(argv[0]);
+      }
+
+    }
+
+    else if (edgeSize == _8BYTE)
+      PR32(filePath, nRuns, nNGPUs);
+
+    else {
+      cout << "Error: wrong --edgeSize" << endl;
       usage(argv[0]);
+    }
+
   } else
     usage(argv[0]);
 

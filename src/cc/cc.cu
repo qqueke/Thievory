@@ -7,8 +7,6 @@
 #include <queue>
 #include <vector>
 
-#define N_FILTER_STREAMS2 24
-
 __global__ void CalculateCostNSplitFrontiers15(const uint32 *demandSize,
                                                uint32 *d_values,
                                                bool *d_frontier,
@@ -71,8 +69,7 @@ __global__ void CalculateCostNSplitFrontiers11(
 
 // #define ZC
 
-void CC32(string filePath, double memAdvise, uint32 nRuns,
-          uint32 nNeighborGPUs) {
+void CC32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
   numa_run_on_node(0);
   ALGORITHM_TYPE algo = CC;
   CSR<uint32> *graph = new CSR<uint32>;
@@ -105,9 +102,9 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
       GPUAssert(cudaStreamCreate(&neighborComputeStreams[i][j]));
   }
 
-  cudaStream_t streams[N_FILTER_STREAMS2];
+  cudaStream_t streams[N_TARGET_FILTER_STREAMS];
 
-  for (uint32 i = 0; i < N_FILTER_STREAMS2; i++)
+  for (uint32 i = 0; i < N_TARGET_FILTER_STREAMS; i++)
     GPUAssert(cudaStreamCreate(&streams[i]));
 
   graph->InitData(0, nNeighborGPUs);
@@ -132,19 +129,6 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
   auto syncDemandPolicy = thrust::cuda::par.on(demandStream);
 
   TimeRecord<chrono::milliseconds> totalProcess("Total execution");
-
-  TimeRecord<chrono::milliseconds> test0("Copy to GPU 0");
-  TimeRecord<chrono::milliseconds> test1("Copy to GPU 1");
-  TimeRecord<chrono::milliseconds> test2("Copy to GPU 2");
-  TimeRecord<chrono::milliseconds> test3("Copy to GPU 3");
-
-  TimeRecord<chrono::milliseconds> k0("Kernel GPU 0");
-  TimeRecord<chrono::milliseconds> k1("Kernel GPU 1");
-  TimeRecord<chrono::milliseconds> k2("Kernel GPU 2");
-  TimeRecord<chrono::milliseconds> k3("Kernel GPU 3");
-
-  // Removing static data
-  cudaMemset(graph->d_inStatic, 0, *(graph->numVertices) * sizeof(bool));
 
   uint64 totalNumFilterPartitions = 0;
   std::cout << "Starting Traversals" << std::endl;
@@ -260,50 +244,6 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
             graph->d_frontier, graph->h_edges, graph->d_offsets);
       }
 
-      // if (*(graph->staticSize) > 0) {
-      //   thrust::exclusive_scan(
-      //       graph->thurstStaticFrontier,
-      //       graph->thurstStaticFrontier + *(graph->numVertices),
-      //       graph->thurstPrefixSum, 0, thrust::plus<uint32>());
-      //
-      //   setStaticList<<<staticGrid, blockDim, 0, staticStream>>>(
-      //       graph->numVertices, graph->d_staticList, graph->d_staticFrontier,
-      //       graph->d_prefixSum);
-      //
-      //   cudaStreamSynchronize(frontierStream);
-      //
-      //   CC32_Static_Kernel<<<staticGrid, blockDim, 0, staticStream>>>(
-      //       graph->staticSize, graph->d_staticList, graph->d_offsets,
-      //       graph->d_staticEdges, graph->d_values, graph->d_frontier,
-      //       graph->d_inStatic);
-      // }
-      //
-      // if (*(graph->demandSize) > 0) {
-      //
-      //   cudaStreamSynchronize(staticStream);
-      //   thrust::exclusive_scan(
-      //       graph->thurstDemandFrontier,
-      //       graph->thurstDemandFrontier + *(graph->numVertices),
-      //       graph->thurstPrefixSum, 0, thrust::plus<uint32>());
-      //
-      //   setDemandList<<<staticGrid, blockDim, 0, demandStream>>>(
-      //       graph->numVertices, graph->d_demandList, graph->d_demandFrontier,
-      //       graph->d_prefixSum);
-      //
-      //   uint32 numBlocks =
-      //       (((*(graph->demandSize)) * WARP_SIZE + THREADS_PER_BLOCK) /
-      //        THREADS_PER_BLOCK);
-      //   dim3 gridDim(THREADS_PER_BLOCK,
-      //                (numBlocks + THREADS_PER_BLOCK) / THREADS_PER_BLOCK);
-      //
-      //   cudaStreamSynchronize(frontierStream);
-      //
-      //   cudaStreamSynchronize(staticStream);
-      //   CC32_Demand_Kernel<<<gridDim, blockDim, 0, demandStream>>>(
-      //       graph->demandSize, graph->d_demandList, graph->d_values,
-      //       graph->d_frontier, graph->h_edges, graph->d_offsets);
-      // }
-
       if (*graph->frontierSize > 10 * graph->avgVertPerPart) {
         uint32 numPartitionsOnTarget = 0;
         uint32 numPartitionsOnNeighbors = 0;
@@ -340,14 +280,13 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
               graph->h_offsets[graph->h_partitionsOffsets[partition + 1]] -
               start;
 
-          uint32 stream = (index / nGPUs) % N_FILTER_STREAMS2;
+          uint32 stream = (index / nGPUs) % N_TARGET_FILTER_STREAMS;
 
           graph->h_partitionList[stream] = partition;
 
           cudaStreamSynchronize(streams[stream]);
 
           // cudaDeviceSynchronize();
-          test0.startRecord();
           cudaMemcpyAsync(graph->d_filterEdges[stream], &graph->h_edges[start],
                           partitionSize * sizeof(*graph->h_edges),
                           cudaMemcpyHostToDevice, streams[stream]);
@@ -358,7 +297,6 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
                           cudaMemcpyHostToDevice, streams[stream]);
 
           //  cudaDeviceSynchronize();
-          test0.endRecord();
 
           targetGPUQueue.push(stream);
 
@@ -387,8 +325,6 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
             cudaSetDevice(gpu + 1);
 
             //   cudaDeviceSynchronize();
-            test1.startRecord();
-
             cudaMemcpyAsync(graph->d_nFilterEdges[gpu][neighborStream],
                             (gpu > 0) ? graph->h_edges2 + neighborStart
                                       : graph->h_edges + neighborStart,
@@ -404,7 +340,6 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
                             neighborMemCpyStreams[gpu][neighborStream]);
 
             //  cudaDeviceSynchronize();
-            test1.endRecord();
 
             neighborGPUQueues[gpu].push(neighborStream);
 
@@ -418,7 +353,7 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
             cudaError_t streamStatus = cudaStreamQuery(streams[tStream]);
 
             if (streamStatus == cudaErrorNotReady) {
-              if (targetGPUQueue.size() < N_FILTER_STREAMS2)
+              if (targetGPUQueue.size() < N_TARGET_FILTER_STREAMS)
                 continue;
               else
                 cudaStreamSynchronize(streams[tStream]);
@@ -428,14 +363,12 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
             numPartitionsOnTarget++;
 
             //   cudaDeviceSynchronize();
-            k0.startRecord();
             CC32_Filter_Kernel<<<staticGrid, blockDim, 0, streams[tStream]>>>(
                 &graph->d_partitionList[tStream], graph->d_partitionsOffsets,
                 graph->d_values, graph->d_frontier,
                 graph->d_filterEdges[tStream], graph->d_offsets,
                 graph->d_filterFrontier);
             //       cudaDeviceSynchronize();
-            k0.endRecord();
             uint32 processedPartition = graph->h_partitionList[tStream];
 
             uint32 partitionStart =
@@ -553,14 +486,11 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
           targetGPUQueue.pop();
           numPartitionsOnTarget++;
 
-          k0.startRecord();
           CC32_Filter_Kernel<<<staticGrid, blockDim, 0, streams[tStream]>>>(
               &graph->d_partitionList[tStream], graph->d_partitionsOffsets,
               graph->d_values, graph->d_frontier, graph->d_filterEdges[tStream],
               graph->d_offsets, graph->d_filterFrontier);
           //   cudaDeviceSynchronize();
-          k0.endRecord();
-
           uint32 processedPartition = graph->h_partitionList[tStream];
 
           uint32 partitionStart =
@@ -699,7 +629,7 @@ void CC32(string filePath, double memAdvise, uint32 nRuns,
   return;
 }
 
-void CC64(string filePath, double memAdvise, uint32 nRuns) {
+void CC64(string filePath, uint32 nRuns) {
   ALGORITHM_TYPE algo = CC;
   CSR<uint32> *graph = new CSR<uint32>;
   graph->ReadInputFile(filePath, algo);
@@ -856,7 +786,7 @@ void CC64(string filePath, double memAdvise, uint32 nRuns) {
 
       uint32 partitionSize = end - start;
 
-      uint32 stream = partition % N_FILTER_STREAMS2;
+      uint32 stream = partition % N_TARGET_FILTER_STREAMS;
 
       graph->h_partitionList[stream] = partition;
 

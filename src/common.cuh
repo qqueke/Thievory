@@ -62,11 +62,6 @@ inline void gpuAssert(cudaError_t code, const char *file, int line,
 }
 enum ALGORITHM_TYPE { BFS, SSSP, CC, PR };
 
-struct Transfer {
-  uint32 stream;
-  uint32 engine;
-};
-
 __constant__ float d_filterThreshold;
 
 // GPU Kernels
