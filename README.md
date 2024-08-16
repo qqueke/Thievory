@@ -21,7 +21,10 @@ In order to compile the code you must install:
    ```bash
    git clone https://github.com/qqueke/Thievory.git
    cd Thievory
+   mkdir results
    ```
+
+   Directory results must be in place so that results are dumped to results/values.bin
 
 2. Update Makefile
 
