@@ -37,7 +37,7 @@ public:
   EdgeType **h_edges2; // Edges in host memory
   EdgeType *h_weights; // Host weights
 
-  EdgeType *h_weights2;      // Host weights
+  EdgeType **h_weights2;     // Host weights
   EdgeType *d_staticWeights; // Device weights
 
   EdgeType *h_values; // Host values array
@@ -631,6 +631,20 @@ void CSR<EdgeType>::ReadInputFile2(const std::string &filePath,
 
   h_edges2 = new EdgeType *[uniqueNumaNodes.size()];
 
+  if (algorithm == SSSP)
+    h_weights2 = new EdgeType *[uniqueNumaNodes.size()];
+
+  //   if (algorithm == SSSP) {
+  //     h_weights2 =
+  //         (uint32 *)numa_alloc_onnode(numEdges * sizeof(*h_weights2), 1);
+  //
+  //     cudaHostRegister(h_weights2, numEdges * sizeof(*h_weights2),
+  //                      cudaHostRegisterDefault);
+  //
+  //     cudaMemcpy(h_weights2, h_weights, numEdges * sizeof(*h_weights2),
+  //                cudaMemcpyHostToHost);
+  //   }
+
   // Convert set to vector
   std::vector<uint32> numaNodesIndexing(uniqueNumaNodes.begin(),
                                         uniqueNumaNodes.end());
@@ -647,8 +661,7 @@ void CSR<EdgeType>::ReadInputFile2(const std::string &filePath,
     GPUAffinityMap[gpuId] = numaNodeToIndex[numaNode];
   }
 
-  // Print the GPU ID to h_edges index mapping
-  std::cout << "GPU ID -> h_edges Index Mapping:" << std::endl;
+  std::cout << "GPU ID -> Index Mapping:" << std::endl;
   for (const auto &pair : GPUAffinityMap) {
     std::cout << "GPU" << pair.first << " -> Index " << pair.second
               << std::endl;
@@ -695,6 +708,15 @@ void CSR<EdgeType>::ReadInputFile2(const std::string &filePath,
   // Pin the memory
   cudaHostRegister(h_edges2[GPUAffinityMap[0]], numEdges * sizeof(EdgeType),
                    cudaHostRegisterMapped);
+
+  if (algorithm == SSSP) {
+    h_weights2[GPUAffinityMap[0]] = (EdgeType *)numa_alloc_onnode(
+        numEdges * sizeof(EdgeType), defaultNumaNode);
+
+    // Pin the memory
+    cudaHostRegister(h_weights2[GPUAffinityMap[0]], numEdges * sizeof(EdgeType),
+                     cudaHostRegisterMapped);
+  }
 
   // cudaHostGetDevicePointer(&d_edges, h_edges, 0);
 
@@ -746,6 +768,19 @@ void CSR<EdgeType>::ReadInputFile2(const std::string &filePath,
 
       cudaMemcpy(h_edges2[index], h_edges2[GPUAffinityMap[0]],
                  numEdges * sizeof(*h_edges2[index]), cudaMemcpyHostToHost);
+
+      if (algorithm == SSSP) {
+        h_weights2[index] = (EdgeType *)(numa_alloc_onnode(
+            numEdges * sizeof(*h_weights2[index]), numaNode));
+
+        // Register memory with CUDA
+        cudaHostRegister(h_weights2[index],
+                         numEdges * sizeof(*h_weights2[index]),
+                         cudaHostRegisterDefault);
+
+        cudaMemcpy(h_weights2[index], h_weights2[GPUAffinityMap[0]],
+                   numEdges * sizeof(*h_edges2[index]), cudaMemcpyHostToHost);
+      }
 
       allocatedNumaNodes[numaNode] = true;
     }

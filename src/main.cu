@@ -189,7 +189,7 @@ int main(int argc, char **argv) {
     std::cout << "Source vertex is: " << srcVertex << std::endl;
 
     if (edgeSize == _4BYTE)
-      BFS32(filePath, srcVertex, nRuns, nNGPUs);
+      BFS32(filePath, srcVertex, nRuns, nNGPUs, numaAffinities);
 
     else if (edgeSize == _8BYTE)
       BFS64(filePath, srcVertex, nRuns);
@@ -217,7 +217,7 @@ int main(int argc, char **argv) {
     std::cout << "Source vertex is: " << srcVertex << std::endl;
 
     if (edgeSize == _4BYTE)
-      SSSP32(filePath, srcVertex, nRuns, nNGPUs);
+      SSSP32(filePath, srcVertex, nRuns, nNGPUs, numaAffinities);
 
     else if (edgeSize == _8BYTE)
       SSSP64(filePath, srcVertex, nRuns);

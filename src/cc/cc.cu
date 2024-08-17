@@ -205,6 +205,13 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
         setStaticList<<<staticGrid, blockDim, 0, staticStream>>>(
             graph->numVertices, graph->d_staticList, graph->d_staticFrontier,
             graph->d_prefixSum);
+
+        cudaStreamSynchronize(frontierStream);
+
+        CC32_Static_Kernel<<<staticGrid, blockDim, 0, staticStream>>>(
+            graph->staticSize, graph->d_staticList, graph->d_offsets,
+            graph->d_staticEdges, graph->d_values, graph->d_frontier,
+            graph->d_inStatic);
       }
 
       if (*(graph->demandSize) > 0) {
@@ -217,18 +224,7 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
         setDemandList<<<staticGrid, blockDim, 0, demandStream>>>(
             graph->numVertices, graph->d_demandList, graph->d_demandFrontier,
             graph->d_prefixSum);
-      }
 
-      if (*(graph->staticSize) > 0) {
-        cudaStreamSynchronize(frontierStream);
-
-        CC32_Static_Kernel<<<staticGrid, blockDim, 0, staticStream>>>(
-            graph->staticSize, graph->d_staticList, graph->d_offsets,
-            graph->d_staticEdges, graph->d_values, graph->d_frontier,
-            graph->d_inStatic);
-      }
-
-      if (*(graph->demandSize) > 0) {
         uint32 numBlocks =
             (((*(graph->demandSize)) * WARP_SIZE + THREADS_PER_BLOCK) /
              THREADS_PER_BLOCK);
