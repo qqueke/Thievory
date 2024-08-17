@@ -7,7 +7,7 @@
 #include <queue>
 #include <vector>
 
-void SSSP32(string filePath, uint32 srcVertex, uint32 nRuns,
+void SSSP32(std::string filePath, uint32 srcVertex, uint32 nRuns,
             uint32 nNeighborGPUs) {
 
   numa_run_on_node(0);
@@ -46,7 +46,7 @@ void SSSP32(string filePath, uint32 srcVertex, uint32 nRuns,
   for (uint32 i = 0; i < N_TARGET_FILTER_STREAMS; i++)
     GPUAssert(cudaStreamCreate(&streams[i]));
 
-  graph->InitData(srcVertex, nNeighborGPUs);
+  graph->InitData();
 
   int device = 0; // Selected device
   uint32 k = 4;
@@ -67,8 +67,6 @@ void SSSP32(string filePath, uint32 srcVertex, uint32 nRuns,
   auto syncStaticPolicy = thrust::cuda::par.on(staticStream);
   auto syncDemandPolicy = thrust::cuda::par.on(demandStream);
 
-  TimeRecord<chrono::milliseconds> totalProcess("Total execution");
-
   uint64 totalNumFilterPartitions = 0;
   std::cout << "Starting Traversals" << std::endl;
   for (int test = 0; test < nRuns; test++) {
@@ -79,8 +77,7 @@ void SSSP32(string filePath, uint32 srcVertex, uint32 nRuns,
         graph->thrustFrontier, graph->thrustFrontier + *(graph->numVertices), 0,
         thrust::plus<uint32>());
 
-    totalProcess.startRecord();
-
+    Timer timer("Execution time: ");
     while (*(graph->frontierSize)) {
 
       setStaticNDemandFrontiers<<<staticGrid, blockDim, 0, frontierStream>>>(
@@ -268,7 +265,7 @@ void SSSP32(string filePath, uint32 srcVertex, uint32 nRuns,
             //   cudaDeviceSynchronize();
 
             cudaMemcpyAsync(graph->d_nFilterEdges[gpu][neighborStream],
-                            (gpu > 0) ? graph->h_edges2 + neighborStart
+                            (gpu > 0) ? graph->h_edges + neighborStart
                                       : graph->h_edges + neighborStart,
                             neighborPartitionSize * sizeof(*graph->h_edges),
                             cudaMemcpyHostToDevice,
@@ -562,11 +559,11 @@ void SSSP32(string filePath, uint32 srcVertex, uint32 nRuns,
             //   cudaDeviceSynchronize();
           }
         }
-        std::cout << "Partitions processed in target GPU: "
-                  << numPartitionsOnTarget << std::endl;
-
-        std::cout << "Partitions to be processed in neighbor GPUs: "
-                  << numPartitionsOnNeighbors << std::endl;
+        // std::cout << "Partitions processed in target GPU: "
+        //           << numPartitionsOnTarget << std::endl;
+        //
+        // std::cout << "Partitions to be processed in neighbor GPUs: "
+        //           << numPartitionsOnNeighbors << std::endl;
       }
       cudaDeviceSynchronize();
 
@@ -574,10 +571,7 @@ void SSSP32(string filePath, uint32 srcVertex, uint32 nRuns,
           graph->thrustFrontier, graph->thrustFrontier + *(graph->numVertices),
           0, thrust::plus<uint32>());
     }
-
-    totalProcess.endRecord();
   }
-  totalProcess.print();
 
   const uint64 partitionSizeMB = PARTITION_SIZE_MB / (1024 * 1024); // 1024^2
 
@@ -594,4 +588,4 @@ void SSSP32(string filePath, uint32 srcVertex, uint32 nRuns,
   return;
 }
 
-void SSSP64(string filePath, uint32 srcVertex, uint32 nRuns) { return; }
+void SSSP64(std::string filePath, uint32 srcVertex, uint32 nRuns) { return; }

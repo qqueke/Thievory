@@ -71,8 +71,6 @@ __global__ void PR64_Static_Kernel(const uint64 *staticSize,
       uint64 startNeighbor = d_offsets[vertexId];
       uint64 endNeighbor = d_offsets[vertexId + 1];
 
-      double tempSum = 0;
-
       for (uint64 i = startNeighbor; i < endNeighbor; i++) {
         uint64 neighborId = d_staticEdges[i];
 

@@ -3,14 +3,15 @@
 
 #include "common.cuh"
 #include "numa.h"
-#include "timer.cuh"
 
 #include <fstream>
+#include <string>
 #include <vector>
+
 template <class EdgeType> class CSR {
 public:
   ALGORITHM_TYPE algorithm; // Chosen algorithm
-  string type;
+  std::string type;
   uint32 nNGPUs;
   EdgeType *numVertices; // Total number of vertices transferred via Zero-Copy
   uint64 numEdges;       // Total number of edges
@@ -32,8 +33,8 @@ public:
 
   EdgeType *d_edges;
   EdgeType *d_weights;
-
-  EdgeType *h_edges2;  // Edges in host memory
+  std::unordered_map<uint32, uint32> GPUAffinityMap;
+  EdgeType **h_edges2; // Edges in host memory
   EdgeType *h_weights; // Host weights
 
   EdgeType *h_weights2;      // Host weights
@@ -127,11 +128,16 @@ public:
   void SetNumStaticEdges();
 
   // Initializes graph
-  void InitData(uint64 sourceVertex, uint32 numberNGPUs);
+  void InitData();
+
+  void ReadInputFile(const std::string &filePath, ALGORITHM_TYPE algo,
+                     std::string algoType = "push");
 
   // Reads input file
-  void ReadInputFile(const std::string &fileName, ALGORITHM_TYPE algo,
-                     string algoType = "push");
+  void ReadInputFile2(const std::string &filePath, ALGORITHM_TYPE algo,
+                      uint64 sourceVertex, uint32 numberNGPUs,
+                      std::unordered_map<int, int> affinityMap,
+                      std::string algoType = "push");
 
   void SetFrontierToRatio(float ratio);
 
@@ -154,7 +160,7 @@ template <class EdgeType> void CSR<EdgeType>::SetFrontierToRatio(float ratio) {
         h_offsets[h_partitionsOffsets[i + 1]] -
         h_offsets[h_partitionsOffsets[i]];
 
-    vector<uint32> frontierList;
+    std::vector<uint32> frontierList;
 
     const uint64 start = h_partitionsOffsets[i];
     const uint64 end = h_partitionsOffsets[i + 1];
@@ -328,13 +334,8 @@ template <class EdgeType> void CSR<EdgeType>::SetNumStaticEdges() {
 }
 
 // TODO: verificar se damos allocs desnecessarios
-template <class EdgeType>
-void CSR<EdgeType>::InitData(uint64 sourceVertex, uint32 numberNGPUs) {
-  TimeRecord<chrono::milliseconds> process("InitData execution");
-  process.startRecord();
-
-  srcVertex = sourceVertex;
-  nNGPUs = numberNGPUs;
+template <class EdgeType> void CSR<EdgeType>::InitData() {
+  Timer timer(std::string("InitData execution time: "));
 
   if (nNGPUs == 0)
     h_filterThreshold = 0.85;
@@ -357,29 +358,30 @@ void CSR<EdgeType>::InitData(uint64 sourceVertex, uint32 numberNGPUs) {
                      sizeof(h_filterThreshold));
 
   // Allocate data in the second Numa Node
-  if (nNGPUs > 1) {
-
-    h_edges2 = (EdgeType *)numa_alloc_onnode(numEdges * sizeof(*h_edges2), 1);
-
-    cudaHostRegister(h_edges2, numEdges * sizeof(*h_edges2),
-                     cudaHostRegisterDefault);
-
-    cudaMemcpy(h_edges2, h_edges, numEdges * sizeof(*h_edges2),
-               cudaMemcpyHostToHost);
-
-    if (algorithm == SSSP) {
-      h_weights2 =
-          (uint32 *)numa_alloc_onnode(numEdges * sizeof(*h_weights2), 1);
-
-      cudaHostRegister(h_weights2, numEdges * sizeof(*h_weights2),
-                       cudaHostRegisterDefault);
-
-      cudaMemcpy(h_weights2, h_weights, numEdges * sizeof(*h_weights2),
-                 cudaMemcpyHostToHost);
-    }
-
-    cudaDeviceSynchronize();
-  }
+  // if (nNGPUs > 1) {
+  //
+  //   h_edges2 = (EdgeType *)numa_alloc_onnode(numEdges * sizeof(*h_edges2),
+  //   1);
+  //
+  //   cudaHostRegister(h_edges2, numEdges * sizeof(*h_edges2),
+  //                    cudaHostRegisterDefault);
+  //
+  //   cudaMemcpy(h_edges2, h_edges, numEdges * sizeof(*h_edges2),
+  //              cudaMemcpyHostToHost);
+  //
+  //   if (algorithm == SSSP) {
+  //     h_weights2 =
+  //         (uint32 *)numa_alloc_onnode(numEdges * sizeof(*h_weights2), 1);
+  //
+  //     cudaHostRegister(h_weights2, numEdges * sizeof(*h_weights2),
+  //                      cudaHostRegisterDefault);
+  //
+  //     cudaMemcpy(h_weights2, h_weights, numEdges * sizeof(*h_weights2),
+  //                cudaMemcpyHostToHost);
+  //   }
+  //
+  //   cudaDeviceSynchronize();
+  // }
 
   if (algorithm == PR) {
     if (type == "push") {
@@ -601,20 +603,56 @@ void CSR<EdgeType>::InitData(uint64 sourceVertex, uint32 numberNGPUs) {
   GPUAssert(cudaPeekAtLastError());
 
   avgVertPerPart = (double)*numVertices / *numPartitions;
-  process.endRecord();
-  process.print();
 
+  return;
+}
+template <class EdgeType>
+void CSR<EdgeType>::ReadInputFile(const std::string &filePath,
+                                  ALGORITHM_TYPE algo, std::string algoType) {
   return;
 }
 
 // Make this robust to errors reading from the file
 template <class EdgeType>
-void CSR<EdgeType>::ReadInputFile(const std::string &filePath,
-                                  ALGORITHM_TYPE algo, string algoType) {
-  TimeRecord<chrono::milliseconds> process("ReadFile execution");
-  process.startRecord();
+void CSR<EdgeType>::ReadInputFile2(const std::string &filePath,
+                                   ALGORITHM_TYPE algo, uint64 sourceVertex,
+                                   uint32 numberNGPUs,
+                                   std::unordered_map<int, int> numaAffinityMap,
+                                   std::string algoType) {
   algorithm = algo;
   type = algoType;
+  srcVertex = sourceVertex;
+  nNGPUs = numberNGPUs;
+
+  std::set<uint32> uniqueNumaNodes;
+  for (const auto &entry : numaAffinityMap) {
+    uniqueNumaNodes.insert(entry.second);
+  }
+
+  h_edges2 = new EdgeType *[uniqueNumaNodes.size()];
+
+  // Convert set to vector
+  std::vector<uint32> numaNodesIndexing(uniqueNumaNodes.begin(),
+                                        uniqueNumaNodes.end());
+
+  // Create a map from NUMA nodes to their indices
+  std::unordered_map<uint32, uint32> numaNodeToIndex;
+  for (uint32 i = 0; i < numaNodesIndexing.size(); ++i) {
+    numaNodeToIndex[numaNodesIndexing[i]] = i;
+  }
+
+  for (const auto &entry : numaAffinityMap) {
+    uint32 gpuId = entry.first;
+    uint32 numaNode = entry.second;
+    GPUAffinityMap[gpuId] = numaNodeToIndex[numaNode];
+  }
+
+  // Print the GPU ID to h_edges index mapping
+  std::cout << "GPU ID -> h_edges Index Mapping:" << std::endl;
+  for (const auto &pair : GPUAffinityMap) {
+    std::cout << "GPU" << pair.first << " -> Index " << pair.second
+              << std::endl;
+  }
 
   cudaHostAlloc((void **)&numVertices, sizeof(*numVertices),
                 cudaHostAllocMapped);
@@ -641,34 +679,34 @@ void CSR<EdgeType>::ReadInputFile(const std::string &filePath,
 
   h_offsets[*numVertices] = numEdges;
 
-  uint32 vertex = 0;
-  uint32 maxNumNeighbors = 0;
-  for (uint32 i = 0; i < *numVertices; i++) {
-    uint32 nNeighbors = h_offsets[i + 1] - h_offsets[i];
+  std::unordered_map<uint32, bool> allocatedNumaNodes;
 
-    if (nNeighbors > maxNumNeighbors) {
-      maxNumNeighbors = nNeighbors;
-      vertex = i;
-    }
-  }
-
-  std::cout << "Vertex with highest neighbor count: " << vertex << std::endl;
+  uint32 defaultNumaNode = 0;
+  auto it = numaAffinityMap.find(0);
+  if (it != numaAffinityMap.end())
+    defaultNumaNode = it->second;
+  else
+    std::cout << "Could not find GPU ID in numaAffinityMap" << std::endl;
 
   // Allocate h_edges on default Numa Node
-  h_edges = (EdgeType *)numa_alloc_onnode(numEdges * sizeof(EdgeType), 0);
+  h_edges2[GPUAffinityMap[0]] = (EdgeType *)numa_alloc_onnode(
+      numEdges * sizeof(EdgeType), defaultNumaNode);
 
   // Pin the memory
-  cudaHostRegister(h_edges, numEdges * sizeof(EdgeType),
+  cudaHostRegister(h_edges2[GPUAffinityMap[0]], numEdges * sizeof(EdgeType),
                    cudaHostRegisterMapped);
 
-  cudaHostGetDevicePointer(&d_edges, h_edges, 0);
+  // cudaHostGetDevicePointer(&d_edges, h_edges, 0);
 
+  allocatedNumaNodes[defaultNumaNode] = true;
+
+  std::cout << "Allocated edges in Numa Node: " << defaultNumaNode << std::endl;
   // cudaMallocManaged((void **)&h_edges, numEdges * sizeof(EdgeType));
   //
   // cudaMemAdvise(h_edges, numEdges * sizeof(EdgeType),
   //               cudaMemAdviseSetAccessedBy, 0);
 
-  infile.read((char *)h_edges, numEdges * sizeof(uint32));
+  infile.read((char *)h_edges2[GPUAffinityMap[0]], numEdges * sizeof(uint32));
 
   if (algorithm == SSSP) {
     // uint64 *tempWeights = new uint64[numEdges];
@@ -695,8 +733,27 @@ void CSR<EdgeType>::ReadInputFile(const std::string &filePath,
 
   infile.close();
 
-  process.endRecord();
-  process.print();
+  for (const auto &pair : numaNodeToIndex) {
+    uint32 numaNode = pair.first;
+    uint32 index = pair.second;
+
+    // Check if the NUMA node has already been allocated
+    if (allocatedNumaNodes.find(numaNode) == allocatedNumaNodes.end()) {
+      h_edges2[index] = (EdgeType *)(numa_alloc_onnode(
+          numEdges * sizeof(*h_edges2[index]), numaNode));
+
+      // Register memory with CUDA
+      cudaHostRegister(h_edges2[index], numEdges * sizeof(*h_edges2[index]),
+                       cudaHostRegisterDefault);
+
+      cudaMemcpy(h_edges2[index], h_edges2[GPUAffinityMap[0]],
+                 numEdges * sizeof(*h_edges2[index]), cudaMemcpyHostToHost);
+
+      allocatedNumaNodes[numaNode] = true;
+      std::cout << "Allocated edges in Numa Node: " << numaNode << std::endl;
+    }
+  }
+
   return;
 }
 
@@ -747,7 +804,7 @@ template <class EdgeType> void CSR<EdgeType>::Free() {
     delete[] h_degree;
 
   delete[] h_offsets;
-  cudaFreeHost(h_edges);
+  // cudaFreeHost(h_edges);
 
   if (algorithm == PR) {
     if (type == "push") {

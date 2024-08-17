@@ -840,16 +840,16 @@ int main(int argc, char **argv) {
   } else if (type == "wcsr") {
     std::cout << "Converting to WCSR" << std::endl;
     ConvertTxtToBCSR(filePath, linesToSkip, true);
-  } else if (type == "emogi") {
+  } else if (type == "bel") {
     std::cout << "Converting to EMOGI" << std::endl;
     ConvertTxtToEMOGI(filePath, linesToSkip);
-  } else if (type == "subway") {
+  } else if (type == "el") {
     std::cout << "Converting to Subway" << std::endl;
     ConvertTxtToEL(filePath, linesToSkip);
-  } else if (type == "subwayWeights") {
+  } else if (type == "wel") {
     std::cout << "Converting to Subway with Weights" << std::endl;
     ConvertTxtToWEL(filePath, linesToSkip);
-  } else if (type == "hytgraph") {
+  } else if (type == "hwel") {
     std::cout << "Converting to HyTGraph" << std::endl;
     ConvertTxtToHWEL(filePath, linesToSkip);
   } else if (type == "all") {

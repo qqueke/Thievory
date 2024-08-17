@@ -7,12 +7,12 @@
 #include <queue>
 #include <vector>
 
-void PR32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
+void PR32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
 
   numa_run_on_node(0);
   ALGORITHM_TYPE algo = PR;
   CSR<uint32> *graph = new CSR<uint32>;
-  graph->ReadInputFile(filePath, algo, string("pull"));
+  graph->ReadInputFile(filePath, algo, std::string("pull"));
 
   cudaStream_t staticStream, demandStream, frontierStream;
 
@@ -45,7 +45,7 @@ void PR32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
   for (uint32 i = 0; i < N_TARGET_FILTER_STREAMS; i++)
     GPUAssert(cudaStreamCreate(&streams[i]));
 
-  graph->InitData(0, nNeighborGPUs);
+  graph->InitData();
 
   int device = 0;
   uint32 k = 2;
@@ -61,8 +61,6 @@ void PR32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
 
   uint64 totalNumFilterPartitions = 0;
 
-  TimeRecord<chrono::milliseconds> totalProcess("Total execution");
-
   std::cout << "Starting Traversals" << std::endl;
   for (int test = 0; test < nRuns; test++) {
 
@@ -72,7 +70,7 @@ void PR32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
         graph->thrustFrontier, graph->thrustFrontier + *(graph->numVertices), 0,
         thrust::plus<uint32>());
 
-    totalProcess.startRecord();
+    Timer timer("Execution time: ");
     while (*(graph->frontierSize)) {
 
       // std::cout << "Frontier size: " << *graph->frontierSize << std::endl;
@@ -243,16 +241,8 @@ void PR32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
             // cudaDeviceSynchronize();
             cudaSetDevice(gpu + 1);
 
-            //   cudaDeviceSynchronize();
-
-            if (neighborPartitionSize + neighborStart > graph->numEdges) {
-
-              std::cout << "Edges malz" << std::endl;
-              // continue;
-            }
-
             cudaMemcpyAsync(graph->d_nFilterEdges[gpu][neighborStream],
-                            (gpu > 0) ? graph->h_edges2 + neighborStart
+                            (gpu > 0) ? graph->h_edges + neighborStart
                                       : graph->h_edges + neighborStart,
                             neighborPartitionSize * sizeof(*graph->h_edges),
                             cudaMemcpyDefault,
@@ -519,11 +509,11 @@ void PR32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
           }
         }
 
-        std::cout << "Partitions processed in target GPU: "
-                  << numPartitionsOnTarget << std::endl;
-
-        std::cout << "Partitions to be processed in neighbor GPUs: "
-                  << numPartitionsOnNeighbors << std::endl;
+        // std::cout << "Partitions processed in target GPU: "
+        //           << numPartitionsOnTarget << std::endl;
+        //
+        // std::cout << "Partitions to be processed in neighbor GPUs: "
+        //           << numPartitionsOnNeighbors << std::endl;
       }
 
       cudaDeviceSynchronize();
@@ -538,10 +528,7 @@ void PR32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
           graph->thrustFrontier, graph->thrustFrontier + *(graph->numVertices),
           0, thrust::plus<uint32>());
     }
-    totalProcess.endRecord();
   }
-
-  totalProcess.print();
 
   const uint64 partitionSizeMB = PARTITION_SIZE_MB / (1024 * 1024); // 1024^2
 
@@ -558,7 +545,7 @@ void PR32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
   return;
 }
 
-void PR64(string filePath, uint32 nRuns) {
+void PR64(std::string filePath, uint32 nRuns) {
   ALGORITHM_TYPE algo = PR;
   CSR<uint64> *graph = new CSR<uint64>;
   graph->ReadInputFile(filePath, algo);
@@ -586,7 +573,6 @@ void PR64(string filePath, uint32 nRuns) {
   GPUAssert(cudaPeekAtLastError());
 
   std::cout << "Starting Traversals" << std::endl;
-  TimeRecord<chrono::milliseconds> totalProcess("Total execution");
 
   for (int test = 0; test < nRuns; test++) {
 
@@ -596,7 +582,6 @@ void PR64(string filePath, uint32 nRuns) {
         graph->thrustFrontier, graph->thrustFrontier + *(graph->numVertices), 0,
         thrust::plus<uint64>());
 
-    totalProcess.startRecord();
     while (*(graph->frontierSize)) {
 
       // This kernel will set the active vertices label to either Static or
@@ -699,9 +684,6 @@ void PR64(string filePath, uint32 nRuns) {
     }
   }
 
-  totalProcess.endRecord();
-  totalProcess.print();
-
   // We're gonna need to compare results now!!
   cudaMemcpy(graph->h_valuesPR, graph->d_valuesPR,
              *(graph->numVertices) * sizeof(double), cudaMemcpyDeviceToHost);
@@ -727,7 +709,7 @@ void PR64(string filePath, uint32 nRuns) {
   return;
 }
 
-void PR32_PUSH(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
+void PR32_PUSH(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
 
   ALGORITHM_TYPE algo = PR;
   CSR<uint32> *graph = new CSR<uint32>;
@@ -764,7 +746,7 @@ void PR32_PUSH(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
   for (uint32 i = 0; i < N_TARGET_FILTER_STREAMS; i++)
     GPUAssert(cudaStreamCreate(&streams[i]));
 
-  graph->InitData(0, nNeighborGPUs);
+  graph->InitData();
 
   int device = 0;
   uint32 k = 2;
@@ -781,7 +763,6 @@ void PR32_PUSH(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
   uint64 totalNumFilterPartitions = 0;
 
   std::cout << "Starting Traversals" << std::endl;
-  TimeRecord<chrono::milliseconds> totalProcess("Total execution");
 
   for (int test = 0; test < nRuns; test++) {
 
@@ -791,7 +772,8 @@ void PR32_PUSH(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
         graph->thrustFrontier, graph->thrustFrontier + *(graph->numVertices), 0,
         thrust::plus<uint32>());
 
-    totalProcess.startRecord();
+    Timer timer("Execution time: ");
+
     while (*(graph->frontierSize)) {
 
       setStaticNDemandFrontiers<<<staticGrid, blockDim, 0, frontierStream>>>(
@@ -810,7 +792,7 @@ void PR32_PUSH(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
                          graph->thurstStaticFrontier + *(graph->numVertices), 0,
                          thrust::plus<uint32>());
 
-      std::cout << "Static size: " << *graph->staticSize << std::endl;
+      // std::cout << "Static size: " << *graph->staticSize << std::endl;
       if (*graph->frontierSize > 80 * graph->avgVertPerPart) {
         CalculateActiveEdgesPerPartition<uint32>
             <<<staticGrid, blockDim, 0, demandStream>>>(
@@ -966,16 +948,8 @@ void PR32_PUSH(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
             // cudaDeviceSynchronize();
             cudaSetDevice(gpu + 1);
 
-            //   cudaDeviceSynchronize();
-
-            if (neighborPartitionSize + neighborStart > graph->numEdges) {
-
-              std::cout << "Edges malz" << std::endl;
-              // continue;
-            }
-
             cudaMemcpyAsync(graph->d_nFilterEdges[gpu][neighborStream],
-                            (gpu > 0) ? graph->h_edges2 + neighborStart
+                            (gpu > 0) ? graph->h_edges + neighborStart
                                       : graph->h_edges + neighborStart,
                             neighborPartitionSize * sizeof(*graph->h_edges),
                             cudaMemcpyDefault,
@@ -1185,14 +1159,14 @@ void PR32_PUSH(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
             // cudaDeviceSynchronize();
           }
 
-          std::cout << "Nao enviei uma partition certinho" << std::endl;
+          // std::cout << "Nao enviei uma partition certinho" << std::endl;
         }
 
         for (uint32 gpu = 0; gpu < neighborGPUQueues.size(); gpu++) {
 
           while (!neighborGPUQueues[gpu].empty()) {
 
-            std::cout << "Nao enviei uma partition certinho" << std::endl;
+            // std::cout << "Nao enviei uma partition certinho" << std::endl;
             uint32 nStream = neighborGPUQueues[gpu].front();
 
             cudaSetDevice(gpu + 1);
@@ -1252,11 +1226,11 @@ void PR32_PUSH(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
           }
         }
 
-        std::cout << "Partitions processed in target GPU: "
-                  << numPartitionsOnTarget << std::endl;
-
-        std::cout << "Partitions to be processed in neighbor GPUs: "
-                  << numPartitionsOnNeighbors << std::endl;
+        // std::cout << "Partitions processed in target GPU: "
+        //           << numPartitionsOnTarget << std::endl;
+        //
+        // std::cout << "Partitions to be processed in neighbor GPUs: "
+        //           << numPartitionsOnNeighbors << std::endl;
       }
       cudaDeviceSynchronize();
 
@@ -1273,9 +1247,6 @@ void PR32_PUSH(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
           0, thrust::plus<uint32>());
     }
   }
-
-  totalProcess.endRecord();
-  totalProcess.print();
 
   const uint64 partitionSizeMB = PARTITION_SIZE_MB / (1024 * 1024); // 1024^2
 

@@ -5,15 +5,15 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+#include "timer.hpp"
 // Thrust utilities
 #include <thrust/device_vector.h>
 #include <thrust/functional.h>
 #include <thrust/host_vector.h>
 #include <thrust/sort.h>
 
-// Utilities
-#include <cmath>
-#include <string>
+#include <set>
+#include <unordered_map>
 
 typedef unsigned int uint32;       // 4 byte data type
 typedef unsigned long long uint64; // 8 byte data type

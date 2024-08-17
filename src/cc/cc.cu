@@ -69,12 +69,13 @@ __global__ void CalculateCostNSplitFrontiers11(
 
 // #define ZC
 
-void CC32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
+void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
+          std::unordered_map<int, int> affinityMap) {
   numa_run_on_node(0);
   ALGORITHM_TYPE algo = CC;
   CSR<uint32> *graph = new CSR<uint32>;
 
-  graph->ReadInputFile(filePath, algo);
+  graph->ReadInputFile2(filePath, algo, 0, nNeighborGPUs, affinityMap);
 
   cudaStream_t staticStream, demandStream, frontierStream;
 
@@ -107,7 +108,7 @@ void CC32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
   for (uint32 i = 0; i < N_TARGET_FILTER_STREAMS; i++)
     GPUAssert(cudaStreamCreate(&streams[i]));
 
-  graph->InitData(0, nNeighborGPUs);
+  graph->InitData();
 
   int device = 0;
   uint32 k = 4;
@@ -128,8 +129,6 @@ void CC32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
   auto syncStaticPolicy = thrust::cuda::par.on(staticStream);
   auto syncDemandPolicy = thrust::cuda::par.on(demandStream);
 
-  TimeRecord<chrono::milliseconds> totalProcess("Total execution");
-
   uint64 totalNumFilterPartitions = 0;
   std::cout << "Starting Traversals" << std::endl;
   for (int test = 0; test < nRuns; test++) {
@@ -140,8 +139,7 @@ void CC32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
         graph->thrustFrontier, graph->thrustFrontier + *(graph->numVertices), 0,
         thrust::plus<uint32>());
 
-    totalProcess.startRecord();
-
+    Timer timer("Execution time: ");
     while (*(graph->frontierSize)) {
 
       //  std::cout << "Frontier size: " << *graph->frontierSize << std::endl;
@@ -241,7 +239,8 @@ void CC32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
 
         CC32_Demand_Kernel<<<gridDim, blockDim, 0, demandStream>>>(
             graph->demandSize, graph->d_demandList, graph->d_values,
-            graph->d_frontier, graph->h_edges, graph->d_offsets);
+            graph->d_frontier, graph->h_edges2[graph->GPUAffinityMap[0]],
+            graph->d_offsets);
       }
 
       if (*graph->frontierSize > 10 * graph->avgVertPerPart) {
@@ -287,7 +286,8 @@ void CC32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
           cudaStreamSynchronize(streams[stream]);
 
           // cudaDeviceSynchronize();
-          cudaMemcpyAsync(graph->d_filterEdges[stream], &graph->h_edges[start],
+          cudaMemcpyAsync(graph->d_filterEdges[stream],
+                          &graph->h_edges2[graph->GPUAffinityMap[0]][start],
                           partitionSize * sizeof(*graph->h_edges),
                           cudaMemcpyHostToDevice, streams[stream]);
 
@@ -326,8 +326,8 @@ void CC32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
 
             //   cudaDeviceSynchronize();
             cudaMemcpyAsync(graph->d_nFilterEdges[gpu][neighborStream],
-                            (gpu > 0) ? graph->h_edges2 + neighborStart
-                                      : graph->h_edges + neighborStart,
+                            graph->h_edges2[graph->GPUAffinityMap[gpu + 1]] +
+                                neighborStart,
                             neighborPartitionSize * sizeof(*graph->h_edges),
                             cudaMemcpyHostToDevice,
                             neighborMemCpyStreams[gpu][neighborStream]);
@@ -595,11 +595,11 @@ void CC32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
             //   cudaDeviceSynchronize();
           }
         }
-        std::cout << "Partitions processed in target GPU: "
-                  << numPartitionsOnTarget << std::endl;
-
-        std::cout << "Partitions to be processed in neighbor GPUs: "
-                  << numPartitionsOnNeighbors << std::endl;
+        // std::cout << "Partitions processed in target GPU: "
+        //           << numPartitionsOnTarget << std::endl;
+        //
+        // std::cout << "Partitions to be processed in neighbor GPUs: "
+        //           << numPartitionsOnNeighbors << std::endl;
       }
       // GPUAssert(cudaPeekAtLastError());
       cudaDeviceSynchronize();
@@ -608,11 +608,7 @@ void CC32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
           graph->thrustFrontier, graph->thrustFrontier + *(graph->numVertices),
           0, thrust::plus<uint32>());
     }
-
-    totalProcess.endRecord();
   }
-
-  totalProcess.print();
 
   const uint64 partitionSizeMB = PARTITION_SIZE_MB / (1024 * 1024); // 1024^2
 
@@ -629,7 +625,7 @@ void CC32(string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
   return;
 }
 
-void CC64(string filePath, uint32 nRuns) {
+void CC64(std::string filePath, uint32 nRuns) {
   ALGORITHM_TYPE algo = CC;
   CSR<uint32> *graph = new CSR<uint32>;
   graph->ReadInputFile(filePath, algo);
@@ -653,8 +649,6 @@ void CC64(string filePath, uint32 nRuns) {
   for (uint32 i = 0; i < 16; i++)
     GPUAssert(cudaStreamCreate(&streams[i]));
 
-  TimeRecord<chrono::milliseconds> totalProcess("Total execution");
-
   // Removing static data
   // cudaMemset(graph->d_inStatic, 0, *(graph->numVertices) * sizeof(bool));
 
@@ -665,8 +659,6 @@ void CC64(string filePath, uint32 nRuns) {
   for (int test = 0; test < nRuns; test++) {
 
     graph->ResetFrontierNValues();
-
-    totalProcess.startRecord();
 
 #ifdef ZC
     uint32 numBlocks =
@@ -1028,9 +1020,6 @@ void CC64(string filePath, uint32 nRuns) {
 #endif
   }
   GPUAssert(cudaDeviceSynchronize());
-
-  totalProcess.endRecord();
-  totalProcess.print();
 
   return;
 }

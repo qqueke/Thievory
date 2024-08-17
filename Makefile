@@ -19,7 +19,7 @@ PR_SRCDIR = $(SRCDIR)/pr
 MAIN_SRC = $(SRCDIR)/main.cu
 GRAPH_SRC = $(SRCDIR)/graph.cuh
 COMMON_SRC = $(SRCDIR)/common.cuh
-TIMER_SRC = $(SRCDIR)/timer.cuh
+TIMER_SRC = $(SRCDIR)/timer.hpp
 
 # BFS 
 BFS_SRC = $(SRCDIR)/bfs/bfs.cu
