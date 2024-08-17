@@ -233,12 +233,12 @@ int main(int argc, char **argv) {
       if (type == "push") {
 
         std::cout << "Running PageRank Push Implementation" << std::endl;
-        PR32_PUSH(filePath, nRuns, nNGPUs);
+        PR32_PUSH(filePath, nRuns, nNGPUs, numaAffinities);
       }
 
       else if (type == "pull") {
         std::cout << "Running PageRank Pull Implementation" << std::endl;
-        PR32(filePath, nRuns, nNGPUs);
+        PR32(filePath, nRuns, nNGPUs, numaAffinities);
       }
 
       else {
@@ -249,7 +249,7 @@ int main(int argc, char **argv) {
     }
 
     else if (edgeSize == _8BYTE)
-      PR32(filePath, nRuns, nNGPUs);
+      PR32(filePath, nRuns, nNGPUs, numaAffinities);
 
     else {
       std::cout << "Error: wrong --edgeSize" << std::endl;

@@ -699,8 +699,6 @@ void CSR<EdgeType>::ReadInputFile2(const std::string &filePath,
   // cudaHostGetDevicePointer(&d_edges, h_edges, 0);
 
   allocatedNumaNodes[defaultNumaNode] = true;
-
-  std::cout << "Allocated edges in Numa Node: " << defaultNumaNode << std::endl;
   // cudaMallocManaged((void **)&h_edges, numEdges * sizeof(EdgeType));
   //
   // cudaMemAdvise(h_edges, numEdges * sizeof(EdgeType),
@@ -750,7 +748,6 @@ void CSR<EdgeType>::ReadInputFile2(const std::string &filePath,
                  numEdges * sizeof(*h_edges2[index]), cudaMemcpyHostToHost);
 
       allocatedNumaNodes[numaNode] = true;
-      std::cout << "Allocated edges in Numa Node: " << numaNode << std::endl;
     }
   }
 

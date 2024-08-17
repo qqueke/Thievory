@@ -7,12 +7,14 @@
 #include <queue>
 #include <vector>
 
-void PR32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
+void PR32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
+          std::unordered_map<int, int> affinityMap) {
 
   numa_run_on_node(0);
   ALGORITHM_TYPE algo = PR;
   CSR<uint32> *graph = new CSR<uint32>;
-  graph->ReadInputFile(filePath, algo, std::string("pull"));
+  graph->ReadInputFile2(filePath, algo, 0, nNeighborGPUs, affinityMap,
+                        std::string("pull"));
 
   cudaStream_t staticStream, demandStream, frontierStream;
 
@@ -156,8 +158,9 @@ void PR32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
                      (numBlocks + THREADS_PER_BLOCK) / THREADS_PER_BLOCK);
 
         PR32_Demand_Kernel<<<gridDim, blockDim, 0, demandStream>>>(
-            graph->demandSize, graph->d_demandList, graph->h_edges,
-            graph->d_offsets, graph->d_valuesPR, graph->d_degree, graph->d_sum,
+            graph->demandSize, graph->d_demandList,
+            graph->h_edges2[graph->GPUAffinityMap[0]], graph->d_offsets,
+            graph->d_valuesPR, graph->d_degree, graph->d_sum,
             graph->d_inStatic);
       }
 
@@ -201,7 +204,8 @@ void PR32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
           cudaStreamSynchronize(streams[stream]);
 
           // cudaDeviceSynchronize();
-          cudaMemcpyAsync(graph->d_filterEdges[stream], &graph->h_edges[start],
+          cudaMemcpyAsync(graph->d_filterEdges[stream],
+                          &graph->h_edges2[graph->GPUAffinityMap[0]][start],
                           partitionSize * sizeof(*graph->h_edges),
                           cudaMemcpyDefault, streams[stream]);
 
@@ -241,12 +245,11 @@ void PR32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
             // cudaDeviceSynchronize();
             cudaSetDevice(gpu + 1);
 
-            cudaMemcpyAsync(graph->d_nFilterEdges[gpu][neighborStream],
-                            (gpu > 0) ? graph->h_edges + neighborStart
-                                      : graph->h_edges + neighborStart,
-                            neighborPartitionSize * sizeof(*graph->h_edges),
-                            cudaMemcpyDefault,
-                            neighborMemCpyStreams[gpu][neighborStream]);
+            cudaMemcpyAsync(
+                graph->d_nFilterEdges[gpu][neighborStream],
+                graph->h_edges2[graph->GPUAffinityMap[gpu + 1]] + neighborStart,
+                neighborPartitionSize * sizeof(*graph->h_edges),
+                cudaMemcpyDefault, neighborMemCpyStreams[gpu][neighborStream]);
 
             // GPUAssert(cudaPeekAtLastError());
             // We can prob allocate this data in the other numa node too
@@ -709,11 +712,12 @@ void PR64(std::string filePath, uint32 nRuns) {
   return;
 }
 
-void PR32_PUSH(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
+void PR32_PUSH(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
+               std::unordered_map<int, int> affinityMap) {
 
   ALGORITHM_TYPE algo = PR;
   CSR<uint32> *graph = new CSR<uint32>;
-  graph->ReadInputFile(filePath, algo);
+  graph->ReadInputFile2(filePath, algo, 0, nNeighborGPUs, affinityMap);
 
   cudaStream_t staticStream, demandStream, frontierStream;
 
@@ -863,8 +867,8 @@ void PR32_PUSH(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
 
         PR32_Demand_Kernel_PUSH<<<gridDim, blockDim, 0, demandStream>>>(
             graph->demandSize, graph->d_demandList, graph->d_frontier,
-            graph->h_edges, graph->d_offsets, graph->d_delta,
-            graph->d_residual);
+            graph->h_edges2[graph->GPUAffinityMap[0]], graph->d_offsets,
+            graph->d_delta, graph->d_residual);
       }
 
       if (*graph->frontierSize > 80 * graph->avgVertPerPart) {
@@ -909,7 +913,8 @@ void PR32_PUSH(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
           cudaStreamSynchronize(streams[stream]);
 
           // cudaDeviceSynchronize();
-          cudaMemcpyAsync(graph->d_filterEdges[stream], &graph->h_edges[start],
+          cudaMemcpyAsync(graph->d_filterEdges[stream],
+                          &graph->h_edges2[graph->GPUAffinityMap[0]][start],
                           partitionSize * sizeof(*graph->h_edges),
                           cudaMemcpyDefault, streams[stream]);
 
@@ -948,12 +953,11 @@ void PR32_PUSH(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs) {
             // cudaDeviceSynchronize();
             cudaSetDevice(gpu + 1);
 
-            cudaMemcpyAsync(graph->d_nFilterEdges[gpu][neighborStream],
-                            (gpu > 0) ? graph->h_edges + neighborStart
-                                      : graph->h_edges + neighborStart,
-                            neighborPartitionSize * sizeof(*graph->h_edges),
-                            cudaMemcpyDefault,
-                            neighborMemCpyStreams[gpu][neighborStream]);
+            cudaMemcpyAsync(
+                graph->d_nFilterEdges[gpu][neighborStream],
+                graph->h_edges2[graph->GPUAffinityMap[gpu + 1]] + neighborStart,
+                neighborPartitionSize * sizeof(*graph->h_edges),
+                cudaMemcpyDefault, neighborMemCpyStreams[gpu][neighborStream]);
 
             // GPUAssert(cudaPeekAtLastError());
             // We can prob allocate this data in the other numa node too

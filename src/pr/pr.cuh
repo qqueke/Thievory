@@ -5,10 +5,12 @@
 #include "../graph.cuh"
 #include "pr_kernels.cuh"
 
-void PR32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs);
+void PR32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
+          std::unordered_map<int, int> affinityMap);
 
 void PR64(std::string filePath, uint32 nRuns);
 
-void PR32_PUSH(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs);
+void PR32_PUSH(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
+               std::unordered_map<int, int> affinityMap);
 
 #endif

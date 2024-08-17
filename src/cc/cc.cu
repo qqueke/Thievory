@@ -286,10 +286,12 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
           cudaStreamSynchronize(streams[stream]);
 
           // cudaDeviceSynchronize();
-          cudaMemcpyAsync(graph->d_filterEdges[stream],
-                          &graph->h_edges2[graph->GPUAffinityMap[0]][start],
-                          partitionSize * sizeof(*graph->h_edges),
-                          cudaMemcpyHostToDevice, streams[stream]);
+          cudaMemcpyAsync(
+              graph->d_filterEdges[stream],
+              &graph->h_edges2[graph->GPUAffinityMap[0]][start],
+              partitionSize *
+                  sizeof(*graph->h_edges2[graph->GPUAffinityMap[0]]),
+              cudaMemcpyHostToDevice, streams[stream]);
 
           cudaMemcpyAsync(&graph->d_partitionList[stream],
                           &graph->h_partitionList[stream],
@@ -595,13 +597,13 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
             //   cudaDeviceSynchronize();
           }
         }
-        // std::cout << "Partitions processed in target GPU: "
-        //           << numPartitionsOnTarget << std::endl;
-        //
-        // std::cout << "Partitions to be processed in neighbor GPUs: "
-        //           << numPartitionsOnNeighbors << std::endl;
+        std::cout << "Partitions processed in target GPU: "
+                  << numPartitionsOnTarget << std::endl;
+
+        std::cout << "Partitions to be processed in neighbor GPUs: "
+                  << numPartitionsOnNeighbors << std::endl;
       }
-      // GPUAssert(cudaPeekAtLastError());
+      GPUAssert(cudaPeekAtLastError());
       cudaDeviceSynchronize();
 
       *(graph->frontierSize) = thrust::reduce(
