@@ -1,3 +1,4 @@
+.cache/*
 datasets/*
 converter/*
 bin/*
