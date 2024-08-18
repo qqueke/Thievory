@@ -8,42 +8,13 @@
 void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
            uint32 nNeighborGPUs, std::unordered_map<int, int> affinityMap) {
 
-  numa_run_on_node(0);
+  // numa_run_on_node(0);
   ALGORITHM_TYPE algo = BFS;
   CSR<uint32> *graph = new CSR<uint32>;
-  graph->ReadInputFile2(filePath, algo, srcVertex, nNeighborGPUs, affinityMap);
-  cudaStream_t staticStream, demandStream, frontierStream;
-
-  GPUAssert(cudaStreamCreate(&frontierStream));
-  GPUAssert(cudaStreamCreate(&staticStream));
-  GPUAssert(cudaStreamCreate(&demandStream));
-  uint32 nGPUs = nNeighborGPUs + 1;
-
-  std::vector<std::array<cudaStream_t, N_FILTER_STREAMS>> neighborMemCpyStreams(
-      nNeighborGPUs);
-
-  std::vector<std::array<cudaStream_t, N_FILTER_STREAMS>>
-      neighborComputeStreams(nNeighborGPUs);
-
-  for (int i = 0; i < nNeighborGPUs; ++i) {
-    cudaSetDevice(i + 1);
-    for (int j = 0; j < N_FILTER_STREAMS; ++j)
-      GPUAssert(cudaStreamCreate(&neighborMemCpyStreams[i][j]));
-  }
-
-  cudaSetDevice(0);
-
-  for (int i = 0; i < nNeighborGPUs; ++i) {
-    for (int j = 0; j < N_FILTER_STREAMS; ++j)
-      GPUAssert(cudaStreamCreate(&neighborComputeStreams[i][j]));
-  }
-
-  cudaStream_t streams[N_TARGET_FILTER_STREAMS];
-
-  for (uint32 i = 0; i < N_TARGET_FILTER_STREAMS; i++)
-    GPUAssert(cudaStreamCreate(&streams[i]));
-
+  graph->ReadInputFile(filePath, algo, srcVertex, nNeighborGPUs, affinityMap);
   graph->InitData();
+
+  uint32 nGPUs = nNeighborGPUs + 1;
   // Adjust this number of blocks in x dimension to be a multiple of the number
   // of SMS and acquire better load balancing
   int device = 0; // Selected device
@@ -55,14 +26,15 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
   dim3 staticGrid = dim3(k * numSMs, 1, 1);
   dim3 blockDim(THREADS_PER_BLOCK, 1, 1); // (x,y,z) = (THREADS_PER_BLOCK, 1, 1)
 
-  auto asyncFrontierPolicy = thrust::cuda::par_nosync.on(frontierStream);
-  auto asyncStaticPolicy = thrust::cuda::par_nosync.on(staticStream);
-  auto asyncDemandPolicy = thrust::cuda::par_nosync.on(demandStream);
-  // auto syncPolicy  = thrust::cuda::par.on(staticStream);
+  // auto asyncFrontierPolicy =
+  // thrust::cuda::par_nosync.on(graph->frontierStream); auto asyncStaticPolicy
+  // = thrust::cuda::par_nosync.on(graph->staticStream); auto asyncDemandPolicy
+  // = thrust::cuda::par_nosync.on(graph->demandStream); auto syncPolicy  =
+  // thrust::cuda::par.on(staticStream);
 
-  auto syncFrontierPolicy = thrust::cuda::par.on(frontierStream);
-  auto syncStaticPolicy = thrust::cuda::par.on(staticStream);
-  auto syncDemandPolicy = thrust::cuda::par.on(demandStream);
+  // auto syncFrontierPolicy = thrust::cuda::par.on(graph->frontierStream);
+  // auto syncStaticPolicy = thrust::cuda::par.on(graph->staticStream);
+  // auto syncDemandPolicy = thrust::cuda::par.on(graph->demandStream);
 
   uint64 totalNumFilterPartitions = 0;
   std::cout << "Starting Traversals" << std::endl;
@@ -75,19 +47,17 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
         thrust::plus<uint32>());
 
     Timer timer("Execution time: ");
-    uint32 iter = 0;
     while (*(graph->frontierSize)) {
-      // std::cout << "Iter: " << ++iter << std::endl;
-      // std::cout << "Frontier size: " << *(graph->frontierSize) << std::endl;
-      setStaticNDemandFrontiers<<<staticGrid, blockDim, 0, frontierStream>>>(
+      setStaticNDemandFrontiers<<<staticGrid, blockDim, 0,
+                                  graph->frontierStream>>>(
           graph->numVertices, graph->d_frontier, graph->d_staticFrontier,
           graph->d_demandFrontier, graph->d_inStatic);
 
-      cudaStreamSynchronize(frontierStream);
+      cudaStreamSynchronize(graph->frontierStream);
 
       cudaMemsetAsync(graph->d_frontier, 0,
                       *(graph->numVertices) * sizeof(*graph->d_frontier),
-                      frontierStream);
+                      graph->frontierStream);
 
       // Calculate the amount of active nodes in GPU memory
       *(graph->staticSize) =
@@ -99,32 +69,32 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
 
       if (*graph->frontierSize > 10 * graph->avgVertPerPart) {
         CalculateActiveEdgesPerPartition<uint32>
-            <<<staticGrid, blockDim, 0, demandStream>>>(
+            <<<staticGrid, blockDim, 0, graph->demandStream>>>(
                 graph->numPartitions, graph->d_partitionsOffsets,
                 graph->d_offsets, graph->d_partitionCost,
                 graph->d_demandFrontier, graph->d_filterFrontier);
 
         CalculateActiveEdgesRatio<uint32>
-            <<<staticGrid, blockDim, 0, demandStream>>>(
+            <<<staticGrid, blockDim, 0, graph->demandStream>>>(
                 graph->numPartitions, graph->d_partitionsOffsets,
                 graph->d_offsets, graph->d_partitionCost,
                 graph->d_demandFrontier, graph->d_filterFrontier);
 
         SplitZeroCopyNFilterFrontiers<uint32>
-            <<<staticGrid, blockDim, 0, demandStream>>>(
+            <<<staticGrid, blockDim, 0, graph->demandStream>>>(
                 graph->numPartitions, graph->d_partitionsOffsets,
                 graph->d_offsets, graph->d_partitionCost,
                 graph->d_demandFrontier, graph->d_filterFrontier);
 
-        cudaStreamSynchronize(demandStream);
+        cudaStreamSynchronize(graph->demandStream);
 
         cudaMemcpyAsync(graph->h_partitionCost, graph->d_partitionCost,
                         *graph->numPartitions * sizeof(*graph->h_partitionCost),
-                        cudaMemcpyDeviceToHost, streams[0]);
+                        cudaMemcpyDeviceToHost, graph->streams[0]);
 
         cudaMemsetAsync(graph->d_partitionCost, 0,
                         *graph->numPartitions * sizeof(*graph->d_partitionCost),
-                        streams[0]);
+                        graph->streams[0]);
       }
 
       // Calculate the amount of active vertices on-demand
@@ -140,13 +110,13 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
             graph->thurstStaticFrontier + *(graph->numVertices),
             graph->thurstPrefixSum, 0, thrust::plus<uint32>());
 
-        setStaticList<<<staticGrid, blockDim, 0, staticStream>>>(
+        setStaticList<<<staticGrid, blockDim, 0, graph->staticStream>>>(
             graph->numVertices, graph->d_staticList, graph->d_staticFrontier,
             graph->d_prefixSum);
 
-        cudaStreamSynchronize(frontierStream);
+        cudaStreamSynchronize(graph->frontierStream);
 
-        BFS32_Static_Kernel<<<staticGrid, blockDim, 0, staticStream>>>(
+        BFS32_Static_Kernel<<<staticGrid, blockDim, 0, graph->staticStream>>>(
             graph->staticSize, graph->d_staticList, graph->d_offsets,
             graph->d_staticEdges, graph->d_values, graph->d_frontier,
             graph->d_inStatic);
@@ -159,7 +129,7 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
             graph->thurstDemandFrontier + *(graph->numVertices),
             graph->thurstPrefixSum, 0, thrust::plus<uint32>());
 
-        setDemandList<<<staticGrid, blockDim, 0, demandStream>>>(
+        setDemandList<<<staticGrid, blockDim, 0, graph->demandStream>>>(
             graph->numVertices, graph->d_demandList, graph->d_demandFrontier,
             graph->d_prefixSum);
 
@@ -169,9 +139,9 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
         dim3 gridDim(THREADS_PER_BLOCK,
                      (numBlocks + THREADS_PER_BLOCK) / THREADS_PER_BLOCK);
 
-        cudaStreamSynchronize(frontierStream);
+        cudaStreamSynchronize(graph->frontierStream);
 
-        BFS32_Demand_Kernel<<<gridDim, blockDim, 0, demandStream>>>(
+        BFS32_Demand_Kernel<<<gridDim, blockDim, 0, graph->demandStream>>>(
             graph->demandSize, graph->d_demandList, graph->d_values,
             graph->d_frontier, graph->h_edges2[graph->GPUAffinityMap[0]],
             graph->d_offsets);
@@ -186,7 +156,7 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
 
         std::vector<uint32> partitionList;
 
-        cudaStreamSynchronize(streams[0]);
+        cudaStreamSynchronize(graph->streams[0]);
 
         for (uint32 partition = 0; partition < *graph->numPartitions;
              partition++) {
@@ -197,7 +167,7 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
           partitionList.push_back(partition);
         }
 
-        cudaStreamSynchronize(frontierStream);
+        cudaStreamSynchronize(graph->frontierStream);
 
         totalNumFilterPartitions += partitionList.size();
 
@@ -217,18 +187,18 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
 
           graph->h_partitionList[stream] = partition;
 
-          cudaStreamSynchronize(streams[stream]);
+          cudaStreamSynchronize(graph->streams[stream]);
 
           // cudaDeviceSynchronize();
           cudaMemcpyAsync(graph->d_filterEdges[stream],
                           &graph->h_edges2[graph->GPUAffinityMap[0]][start],
                           partitionSize * sizeof(*graph->h_edges),
-                          cudaMemcpyHostToDevice, streams[stream]);
+                          cudaMemcpyHostToDevice, graph->streams[stream]);
 
           cudaMemcpyAsync(&graph->d_partitionList[stream],
                           &graph->h_partitionList[stream],
                           sizeof(*graph->h_partitionList),
-                          cudaMemcpyHostToDevice, streams[stream]);
+                          cudaMemcpyHostToDevice, graph->streams[stream]);
 
           //  cudaDeviceSynchronize();
 
@@ -254,7 +224,8 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
             graph->h_nPartList[gpu][neighborStream] = partition;
 
             // Sync compute stream on device 0
-            cudaStreamSynchronize(neighborComputeStreams[gpu][neighborStream]);
+            cudaStreamSynchronize(
+                graph->neighborComputeStreams[gpu][neighborStream]);
             // cudaDeviceSynchronize();
             cudaSetDevice(gpu + 1);
 
@@ -265,14 +236,14 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
                                 neighborStart,
                             neighborPartitionSize * sizeof(*graph->h_edges),
                             cudaMemcpyHostToDevice,
-                            neighborMemCpyStreams[gpu][neighborStream]);
+                            graph->neighborMemCpyStreams[gpu][neighborStream]);
 
             // We can prob allocate this data in the other numa node too
             cudaMemcpyAsync(&graph->d_nPartList[gpu][neighborStream],
                             graph->h_nPartList[gpu] + neighborStream,
                             sizeof(**graph->h_nPartList),
                             cudaMemcpyHostToDevice,
-                            neighborMemCpyStreams[gpu][neighborStream]);
+                            graph->neighborMemCpyStreams[gpu][neighborStream]);
 
             //  cudaDeviceSynchronize();
 
@@ -282,23 +253,24 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
           }
 
           // while (!targetGPUQueue.empty())
-          {
+          for (uint32 j = 0; j < targetGPUQueue.size(); j++) {
             uint32 tStream = targetGPUQueue.front();
 
-            cudaError_t streamStatus = cudaStreamQuery(streams[tStream]);
+            cudaError_t streamStatus = cudaStreamQuery(graph->streams[tStream]);
 
             if (streamStatus == cudaErrorNotReady) {
               if (targetGPUQueue.size() < N_TARGET_FILTER_STREAMS)
-                continue;
+                break;
               else
-                cudaStreamSynchronize(streams[tStream]);
+                cudaStreamSynchronize(graph->streams[tStream]);
             }
 
             targetGPUQueue.pop();
             numPartitionsOnTarget++;
 
             //   cudaDeviceSynchronize();
-            BFS32_Filter_Kernel<<<staticGrid, blockDim, 0, streams[tStream]>>>(
+            BFS32_Filter_Kernel<<<staticGrid, blockDim, 0,
+                                  graph->streams[tStream]>>>(
                 &graph->d_partitionList[tStream], graph->d_partitionsOffsets,
                 graph->d_values, graph->d_frontier,
                 graph->d_filterEdges[tStream], graph->d_offsets,
@@ -323,7 +295,8 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
               cudaMemcpyAsync(&graph->d_staticEdges[partitionStart],
                               graph->d_filterEdges[tStream],
                               processedPartitionSize * sizeof(*graph->h_edges),
-                              cudaMemcpyDeviceToDevice, streams[tStream]);
+                              cudaMemcpyDeviceToDevice,
+                              graph->streams[tStream]);
 
               cudaMemsetAsync(
                   &graph->d_inStatic
@@ -332,7 +305,7 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
                   (graph->h_partitionsOffsets[processedPartition + 1] -
                    graph->h_partitionsOffsets[processedPartition]) *
                       sizeof(*graph->d_inStatic),
-                  streams[tStream]);
+                  graph->streams[tStream]);
               // cudaDeviceSynchronize();
             }
           }
@@ -340,19 +313,20 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
           for (uint32 gpu = 0; gpu < neighborGPUQueues.size(); gpu++) {
 
             // while (!neighborGPUQueues[gpu].empty())
-            {
+            for (uint32 j = 0; j < neighborGPUQueues[gpu].size(); j++) {
               uint32 nStream = neighborGPUQueues[gpu].front();
 
               cudaSetDevice(gpu + 1);
               cudaError_t streamStatus =
-                  cudaStreamQuery(neighborMemCpyStreams[gpu][nStream]);
+                  cudaStreamQuery(graph->neighborMemCpyStreams[gpu][nStream]);
 
               if (streamStatus == cudaErrorNotReady) {
                 if (neighborGPUQueues[gpu].size() < N_FILTER_STREAMS) {
                   cudaSetDevice(0);
-                  continue;
+                  break;
                 } else
-                  cudaStreamSynchronize(neighborMemCpyStreams[gpu][nStream]);
+                  cudaStreamSynchronize(
+                      graph->neighborMemCpyStreams[gpu][nStream]);
               }
 
               cudaSetDevice(0);
@@ -379,7 +353,7 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
                                 processedPartitionSize *
                                     sizeof(*graph->h_edges),
                                 cudaMemcpyDeviceToDevice,
-                                neighborComputeStreams[gpu][nStream]);
+                                graph->neighborComputeStreams[gpu][nStream]);
 
                 // cudaSetDevice(0);
 
@@ -390,12 +364,12 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
                     (graph->h_partitionsOffsets[processedPartition + 1] -
                      graph->h_partitionsOffsets[processedPartition]) *
                         sizeof(*graph->d_inStatic),
-                    neighborComputeStreams[gpu][nStream]);
+                    graph->neighborComputeStreams[gpu][nStream]);
 
                 // cudaDeviceSynchronize();
                 BFS32_NeighborFilter_Kernel<<<
                     staticGrid, blockDim, 0,
-                    neighborComputeStreams[gpu][nStream]>>>(
+                    graph->neighborComputeStreams[gpu][nStream]>>>(
                     &graph->d_nPartList[gpu][nStream],
                     graph->d_partitionsOffsets, graph->d_values,
                     graph->d_frontier, graph->d_staticEdges, graph->d_offsets,
@@ -403,7 +377,7 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
               } else {
                 BFS32_NeighborFilter_Kernel<<<
                     staticGrid, blockDim, 0,
-                    neighborComputeStreams[gpu][nStream]>>>(
+                    graph->neighborComputeStreams[gpu][nStream]>>>(
                     &graph->d_nPartList[gpu][nStream],
                     graph->d_partitionsOffsets, graph->d_values,
                     graph->d_frontier, graph->d_nFilterEdges[gpu][nStream],
@@ -417,10 +391,11 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
 
           uint32 tStream = targetGPUQueue.front();
 
-          cudaStreamSynchronize(streams[tStream]);
+          cudaStreamSynchronize(graph->streams[tStream]);
           targetGPUQueue.pop();
           numPartitionsOnTarget++;
-          BFS32_Filter_Kernel<<<staticGrid, blockDim, 0, streams[tStream]>>>(
+          BFS32_Filter_Kernel<<<staticGrid, blockDim, 0,
+                                graph->streams[tStream]>>>(
               &graph->d_partitionList[tStream], graph->d_partitionsOffsets,
               graph->d_values, graph->d_frontier, graph->d_filterEdges[tStream],
               graph->d_offsets, graph->d_filterFrontier);
@@ -443,7 +418,7 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
             cudaMemcpyAsync(&graph->d_staticEdges[partitionStart],
                             graph->d_filterEdges[tStream],
                             processedPartitionSize * sizeof(*graph->h_edges),
-                            cudaMemcpyDeviceToDevice, streams[tStream]);
+                            cudaMemcpyDeviceToDevice, graph->streams[tStream]);
 
             cudaMemsetAsync(
                 &graph->d_inStatic
@@ -452,7 +427,7 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
                 (graph->h_partitionsOffsets[processedPartition + 1] -
                  graph->h_partitionsOffsets[processedPartition]) *
                     sizeof(*graph->d_inStatic),
-                streams[tStream]);
+                graph->streams[tStream]);
             // cudaDeviceSynchronize();
           }
         }
@@ -464,14 +439,15 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
 
             cudaSetDevice(gpu + 1);
             cudaError_t streamStatus =
-                cudaStreamQuery(neighborMemCpyStreams[gpu][nStream]);
+                cudaStreamQuery(graph->neighborMemCpyStreams[gpu][nStream]);
 
             if (streamStatus == cudaErrorNotReady) {
               if (neighborGPUQueues[gpu].size() < N_FILTER_STREAMS) {
                 cudaSetDevice(0);
                 continue;
               } else
-                cudaStreamSynchronize(neighborMemCpyStreams[gpu][nStream]);
+                cudaStreamSynchronize(
+                    graph->neighborMemCpyStreams[gpu][nStream]);
             }
 
             cudaSetDevice(0);
@@ -498,7 +474,7 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
                               graph->d_nFilterEdges[gpu][nStream],
                               processedPartitionSize * sizeof(*graph->h_edges),
                               cudaMemcpyDeviceToDevice,
-                              neighborComputeStreams[gpu][nStream]);
+                              graph->neighborComputeStreams[gpu][nStream]);
 
               // cudaSetDevice(0);
 
@@ -509,19 +485,19 @@ void BFS32(std::string filePath, uint32 srcVertex, uint32 nRuns,
                   (graph->h_partitionsOffsets[processedPartition + 1] -
                    graph->h_partitionsOffsets[processedPartition]) *
                       sizeof(*graph->d_inStatic),
-                  neighborComputeStreams[gpu][nStream]);
+                  graph->neighborComputeStreams[gpu][nStream]);
 
               // cudaDeviceSynchronize();
               BFS32_NeighborFilter_Kernel<<<
                   staticGrid, blockDim, 0,
-                  neighborComputeStreams[gpu][nStream]>>>(
+                  graph->neighborComputeStreams[gpu][nStream]>>>(
                   &graph->d_nPartList[gpu][nStream], graph->d_partitionsOffsets,
                   graph->d_values, graph->d_frontier, graph->d_staticEdges,
                   graph->d_offsets, graph->d_filterFrontier);
             } else {
               BFS32_NeighborFilter_Kernel<<<
                   staticGrid, blockDim, 0,
-                  neighborComputeStreams[gpu][nStream]>>>(
+                  graph->neighborComputeStreams[gpu][nStream]>>>(
                   &graph->d_nPartList[gpu][nStream], graph->d_partitionsOffsets,
                   graph->d_values, graph->d_frontier,
                   graph->d_nFilterEdges[gpu][nStream], graph->d_offsets,

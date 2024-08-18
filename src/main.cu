@@ -55,7 +55,6 @@ int main(int argc, char **argv) {
   cudaSetDevice(device);
   cudaSetDevice(0);
 
-  numa_run_on_node(0);
   std::cout << "Selected device " << device << std::endl;
 
   // size_t totalMemory;
@@ -86,6 +85,7 @@ int main(int argc, char **argv) {
   uint32 srcVertex = 1;
   uint32 nRuns = 1;
   uint32 nNGPUs = 0;
+  uint32 defaultDevice = 0;
 
   try {
     for (unsigned int i = 1; i < argc - 1; i = i + 2) {
@@ -104,6 +104,8 @@ int main(int argc, char **argv) {
         nRuns = atoi(argv[i + 1]);
       else if (strcmp(argv[i], "--gpus") == 0)
         nNGPUs = atoi(argv[i + 1]);
+      else if (strcmp(argv[i], "--device") == 0)
+        defaultDevice = atoi(argv[i + 1]);
     }
   } catch (...) {
     std::cerr << "An exception has occurred.\n";
@@ -113,12 +115,12 @@ int main(int argc, char **argv) {
   if (!hasInput)
     exit(0);
 
-  std::unordered_map<uint32, uint32> affinityMap = {
-      {0, 3}, // GPU0 -> NUMA Node 3
-      {1, 1}, // GPU1 -> NUMA Node 1
-      {2, 7}, // GPU2 -> NUMA Node 7
-      {3, 3}  // GPU3 -> NUMA Node 3
-  };
+  // std::unordered_map<uint32, uint32> affinityMap = {
+  //     {0, 3}, // GPU0 -> NUMA Node 3
+  //     {1, 1}, // GPU1 -> NUMA Node 1
+  //     {2, 7}, // GPU2 -> NUMA Node 7
+  //     {3, 3}  // GPU3 -> NUMA Node 3
+  // };
 
   std::string topoOutput = runNvidiaSmiTopo();
 
@@ -141,45 +143,15 @@ int main(int argc, char **argv) {
   std::cout << "GPU to NUMA Affinity Mapping:\n";
   for (const auto &entry : numaAffinities) {
     std::cout << "GPU" << entry.first << " -> NUMA Node " << entry.second
-              << "\n";
+              << std::endl;
   }
-  //
-  // std::set<uint32> uniqueNumaNodes;
-  // for (const auto &entry : numaAffinities) {
-  //   uniqueNumaNodes.insert(entry.second);
-  // }
-  //
-  // // Convert set to vector
-  // std::vector<uint32> numaNodesIndexing(uniqueNumaNodes.begin(),
-  //                                       uniqueNumaNodes.end());
-  //
-  // // Create a map from NUMA nodes to their indices
-  // std::unordered_map<uint32, uint32> numaNodeToIndex;
-  // for (uint32 i = 0; i < numaNodesIndexing.size(); ++i) {
-  //   numaNodeToIndex[numaNodesIndexing[i]] = i;
-  // }
-  //
-  // // Print the unique NUMA nodes and their indices for verification
-  // std::cout << "NUMA Node -> Index Mapping:" << std::endl;
-  // for (const auto &pair : numaNodeToIndex) {
-  //   std::cout << "NUMA Node " << pair.first << " -> Index " << pair.second
-  //             << std::endl;
-  // }
-  //
-  // // Step 2: Create a map from GPU IDs to indices in h_edges
-  // std::unordered_map<uint32, uint32> gpuToIndex;
-  // for (const auto &entry : numaAffinities) {
-  //   uint32 gpuId = entry.first;
-  //   uint32 numaNode = entry.second;
-  //   gpuToIndex[gpuId] = numaNodeToIndex[numaNode];
-  // }
-  //
-  // // Print the GPU ID to h_edges index mapping
-  // std::cout << "GPU ID -> h_edges Index Mapping:" << std::endl;
-  // for (const auto &pair : gpuToIndex) {
-  //   std::cout << "GPU" << pair.first << " -> Index " << pair.second
-  //             << std::endl;
-  // }
+
+  for (const auto &entry : numaAffinities) {
+    if (entry.first == 0) {
+      numa_run_on_node(entry.second);
+      std::cout << "Primary Numa Node: " << entry.second << std::endl;
+    }
+  }
 
   std::cout << "Running " << algorithm << " with edge size of " << edgeSize
             << "B and using " << nNGPUs << " neighbor GPUs" << std::endl;

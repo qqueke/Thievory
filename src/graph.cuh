@@ -115,6 +115,16 @@ public:
   double *h_delta;
   double *h_residual;
 
+  // Streams
+  cudaStream_t staticStream, demandStream, frontierStream;
+
+  std::vector<std::array<cudaStream_t, N_FILTER_STREAMS>> neighborMemCpyStreams;
+
+  std::vector<std::array<cudaStream_t, N_FILTER_STREAMS>>
+      neighborComputeStreams;
+
+  cudaStream_t streams[N_TARGET_FILTER_STREAMS];
+
   // Reset frontier and values arrays
   void ResetFrontierNValues();
 
@@ -130,14 +140,11 @@ public:
   // Initializes graph
   void InitData();
 
-  void ReadInputFile(const std::string &filePath, ALGORITHM_TYPE algo,
-                     std::string algoType = "push");
-
   // Reads input file
-  void ReadInputFile2(const std::string &filePath, ALGORITHM_TYPE algo,
-                      uint64 sourceVertex, uint32 numberNGPUs,
-                      std::unordered_map<int, int> affinityMap,
-                      std::string algoType = "push");
+  void ReadInputFile(const std::string &filePath, ALGORITHM_TYPE algo,
+                     uint64 sourceVertex, uint32 numberNGPUs,
+                     std::unordered_map<int, int> affinityMap,
+                     std::string algoType = "push");
 
   void SetFrontierToRatio(float ratio);
 
@@ -336,6 +343,29 @@ template <class EdgeType> void CSR<EdgeType>::SetNumStaticEdges() {
 // TODO: verificar se damos allocs desnecessarios
 template <class EdgeType> void CSR<EdgeType>::InitData() {
   Timer timer(std::string("InitData execution time: "));
+
+  GPUAssert(cudaStreamCreate(&frontierStream));
+  GPUAssert(cudaStreamCreate(&staticStream));
+  GPUAssert(cudaStreamCreate(&demandStream));
+
+  neighborMemCpyStreams.resize(nNGPUs);
+  neighborComputeStreams.resize(nNGPUs);
+
+  for (int i = 0; i < nNGPUs; ++i) {
+    cudaSetDevice(i + 1);
+    for (int j = 0; j < N_FILTER_STREAMS; ++j)
+      GPUAssert(cudaStreamCreate(&neighborMemCpyStreams[i][j]));
+  }
+
+  cudaSetDevice(0);
+
+  for (int i = 0; i < nNGPUs; ++i) {
+    for (int j = 0; j < N_FILTER_STREAMS; ++j)
+      GPUAssert(cudaStreamCreate(&neighborComputeStreams[i][j]));
+  }
+
+  for (uint32 i = 0; i < N_TARGET_FILTER_STREAMS; i++)
+    GPUAssert(cudaStreamCreate(&streams[i]));
 
   if (nNGPUs == 0)
     h_filterThreshold = 0.85;
@@ -606,19 +636,14 @@ template <class EdgeType> void CSR<EdgeType>::InitData() {
 
   return;
 }
-template <class EdgeType>
-void CSR<EdgeType>::ReadInputFile(const std::string &filePath,
-                                  ALGORITHM_TYPE algo, std::string algoType) {
-  return;
-}
 
 // Make this robust to errors reading from the file
 template <class EdgeType>
-void CSR<EdgeType>::ReadInputFile2(const std::string &filePath,
-                                   ALGORITHM_TYPE algo, uint64 sourceVertex,
-                                   uint32 numberNGPUs,
-                                   std::unordered_map<int, int> numaAffinityMap,
-                                   std::string algoType) {
+void CSR<EdgeType>::ReadInputFile(const std::string &filePath,
+                                  ALGORITHM_TYPE algo, uint64 sourceVertex,
+                                  uint32 numberNGPUs,
+                                  std::unordered_map<int, int> numaAffinityMap,
+                                  std::string algoType) {
   algorithm = algo;
   type = algoType;
   srcVertex = sourceVertex;
