@@ -1,11 +1,12 @@
-#include "cc.cuh"
-#include "cc_kernels.cuh"
+#include <numa.h>
+
 #include <iostream>
 #include <ostream>
-
-#include <numa.h>
 #include <queue>
 #include <vector>
+
+#include "cc.cuh"
+#include "cc_kernels.cuh"
 
 __global__ void CalculateCostNSplitFrontiers15(const uint32 *demandSize,
                                                uint32 *d_values,
@@ -41,7 +42,6 @@ __global__ void CalculateCostNSplitFrontiers15(const uint32 *demandSize,
 __global__ void CalculateCostNSplitFrontiers11(
     const uint32 *partitionList, uint32 *d_partitionsOffsets, uint32 *d_values,
     bool *d_frontier, const uint32 *d_filterEdges, const uint64 *d_offsets) {
-
   const uint32 tid = blockIdx.x * blockDim.x + threadIdx.x;
   uint32 warpIdx = tid >> WARP_SHIFT;
   const uint32 laneIdx = tid & ((1 << WARP_SHIFT) - 1);
@@ -54,7 +54,6 @@ __global__ void CalculateCostNSplitFrontiers11(
 
   for (warpIdx += d_partitionsOffsets[partition];
        warpIdx < d_partitionsOffsets[partition + 1]; warpIdx += numWarps) {
-
     uint32 sourceValue = d_values[warpIdx];
 
     const uint64 start = d_offsets[warpIdx] - startEdge;
@@ -86,7 +85,8 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
   uint32 numSMs = prop.multiProcessorCount;
 
   dim3 staticGrid = dim3(k * numSMs, 1, 1);
-  dim3 blockDim(THREADS_PER_BLOCK, 1, 1); // (x,y,z) = (THREADS_PER_BLOCK, 1, 1)
+  dim3 blockDim(THREADS_PER_BLOCK, 1,
+                1);  // (x,y,z) = (THREADS_PER_BLOCK, 1, 1)
 
   auto asyncFrontierPolicy = thrust::cuda::par_nosync.on(graph->frontierStream);
   auto asyncStaticPolicy = thrust::cuda::par_nosync.on(graph->staticStream);
@@ -97,11 +97,11 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
   // auto syncStaticPolicy = thrust::cuda::par.on(staticStream);
   // auto syncDemandPolicy = thrust::cuda::par.on(demandStream);
 
+  graph->SetFrontierToRatio(0.1f);
   uint64 totalNumFilterPartitions = 0;
-
+  float totalDuration = 0.0f;
   std::cout << "Starting Traversals" << std::endl;
   for (int test = 0; test < nRuns; test++) {
-
     graph->ResetFrontierNValues();
 
     *(graph->frontierSize) = thrust::reduce(
@@ -110,7 +110,6 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
 
     Timer timer("Execution time: ");
     while (*(graph->frontierSize)) {
-
       setStaticNDemandFrontiers<<<staticGrid, blockDim, 0,
                                   graph->frontierStream>>>(
           graph->numVertices, graph->d_frontier, graph->d_staticFrontier,
@@ -165,7 +164,6 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
                          thrust::plus<uint32>());
 
       if (*(graph->staticSize) > 0) {
-
         thrust::exclusive_scan(
             asyncStaticPolicy, graph->thurstStaticFrontier,
             graph->thurstStaticFrontier + *(graph->numVertices),
@@ -255,7 +253,6 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
 
         for (uint32 partition = 0; partition < *graph->numPartitions;
              partition++) {
-
           if (graph->h_partitionCost[partition] <= graph->h_filterThreshold)
             continue;
 
@@ -267,7 +264,6 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
         totalNumFilterPartitions += partitionList.size();
 
         for (uint32 index = 0; index < partitionList.size(); index++) {
-
           uint32 partition = partitionList[index];
 
           // Partition edge start
@@ -300,8 +296,7 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
           targetGPUQueue.push(stream);
 
           for (uint32 gpu = 0; gpu < neighborGPUQueues.size(); gpu++) {
-            if (index + 1 >= partitionList.size())
-              break;
+            if (index + 1 >= partitionList.size()) break;
 
             index++;
             partition = partitionList[index];
@@ -324,12 +319,12 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
             cudaSetDevice(gpu + 1);
 
             //   cudaDeviceSynchronize();
-            cudaMemcpyAsync(graph->d_nFilterEdges[gpu][neighborStream],
-                            graph->h_edges2[graph->GPUAffinityMap[gpu + 1]] +
-                                neighborStart,
-                            neighborPartitionSize * sizeof(*graph->h_edges),
-                            cudaMemcpyHostToDevice,
-                            graph->neighborMemCpyStreams[gpu][neighborStream]);
+            cudaMemcpyAsync(
+                graph->d_nFilterEdges[gpu][neighborStream],
+                graph->h_edges2[graph->GPUAffinityMap[gpu + 1]] + neighborStart,
+                neighborPartitionSize * sizeof(*graph->h_edges),
+                cudaMemcpyHostToDevice,
+                graph->neighborMemCpyStreams[gpu][neighborStream]);
 
             // We can prob allocate this data in the other numa node too
             cudaMemcpyAsync(&graph->d_nPartList[gpu][neighborStream],
@@ -379,7 +374,6 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
             uint32 processedPartitionSize = partitionEnd - partitionStart;
 
             if (partitionEnd <= graph->numStaticEdges) {
-
               // cudaStreamSynchronize(staticStreams[processedPartition]);
               cudaMemcpyAsync(&graph->d_staticEdges[partitionStart],
                               graph->d_filterEdges[tStream],
@@ -399,7 +393,6 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
           }
 
           for (uint32 gpu = 0; gpu < neighborGPUQueues.size(); gpu++) {
-
             // while (!neighborGPUQueues[gpu].empty())
             for (uint32 j = 0; j < neighborGPUQueues[gpu].size(); j++) {
               uint32 nStream = neighborGPUQueues[gpu].front();
@@ -434,14 +427,13 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
               uint32 processedPartitionSize = partitionEnd - partitionStart;
 
               if (partitionEnd <= graph->numStaticEdges) {
-
                 // cudaSetDevice(gpu + 1);
-                cudaMemcpyAsync(&graph->d_staticEdges[partitionStart],
-                                graph->d_nFilterEdges[gpu][nStream],
-                                processedPartitionSize *
-                                    sizeof(*graph->h_edges),
-                                cudaMemcpyDeviceToDevice,
-                                graph->neighborComputeStreams[gpu][nStream]);
+                cudaMemcpyAsync(
+                    &graph->d_staticEdges[partitionStart],
+                    graph->d_nFilterEdges[gpu][nStream],
+                    processedPartitionSize * sizeof(*graph->h_edges),
+                    cudaMemcpyDeviceToDevice,
+                    graph->neighborComputeStreams[gpu][nStream]);
 
                 // cudaSetDevice(0);
 
@@ -476,7 +468,6 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
         }
 
         while (!targetGPUQueue.empty()) {
-
           uint32 tStream = targetGPUQueue.front();
 
           cudaStreamSynchronize(graph->streams[tStream]);
@@ -501,7 +492,6 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
           uint32 processedPartitionSize = partitionEnd - partitionStart;
 
           if (partitionEnd <= graph->numStaticEdges) {
-
             // cudaStreamSynchronize(staticStreams[processedPartition]);
             cudaMemcpyAsync(&graph->d_staticEdges[partitionStart],
                             graph->d_filterEdges[tStream],
@@ -521,7 +511,6 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
         }
 
         for (uint32 gpu = 0; gpu < neighborGPUQueues.size(); gpu++) {
-
           while (!neighborGPUQueues[gpu].empty()) {
             uint32 nStream = neighborGPUQueues[gpu].front();
 
@@ -555,7 +544,6 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
             uint32 processedPartitionSize = partitionEnd - partitionStart;
 
             if (partitionEnd <= graph->numStaticEdges) {
-
               // Aqui
               // cudaSetDevice(gpu + 1);
               cudaMemcpyAsync(&graph->d_staticEdges[partitionStart],
@@ -607,453 +595,22 @@ void CC32(std::string filePath, uint32 nRuns, uint32 nNeighborGPUs,
           graph->thrustFrontier, graph->thrustFrontier + *(graph->numVertices),
           0, thrust::plus<uint32>());
     }
+
+    totalDuration += timer.GetDuration();
   }
 
-  const uint64 partitionSizeMB = PARTITION_SIZE_MB / (1024 * 1024); // 1024^2
+  const uint64 partitionSizeMB = PARTITION_SIZE_MB / (1024 * 1024);  // 1024^2
 
   uint64 MBytes = totalNumFilterPartitions * partitionSizeMB;
 
-  // uint64 GBytes = MBytes >> 10;
-  std::cout << "Total partitions in filter: " << totalNumFilterPartitions
+  std::cout << "Total amount of data sent with filter: " << MBytes << " MB"
             << std::endl;
 
-  std::cout << "Total amount of data sent with filter: " << MBytes << " MB"
+  std::cout << "Average execution time: " << totalDuration / nRuns << " ms"
             << std::endl;
 
   graph->DumpValues();
   return;
 }
 
-void CC64(std::string filePath, uint32 nRuns) {
-  ALGORITHM_TYPE algo = CC;
-  CSR<uint32> *graph = new CSR<uint32>;
-  // graph->ReadInputFile(filePath, algo);
-  // graph->InitData(0, 0);
-  // Adjust this number of blocks in x dimension to be a multiple of the
-  // number of SMS and acquire better load balancing
-  int device = 0; // Selected device
-  uint32 k =
-      4; // Multiple of SMs to choose for the grid dimension (to be adjusted)
-
-  cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, device);
-  uint32 numSMs = prop.multiProcessorCount;
-
-  dim3 staticGrid = dim3(k * numSMs, 1, 1);
-  dim3 blockDim(THREADS_PER_BLOCK, 1,
-                1); // (x,y,z) = (THREADS_PER_BLOCK, 1, 1)
-
-  cudaStream_t streams[16];
-
-  for (uint32 i = 0; i < 16; i++)
-    GPUAssert(cudaStreamCreate(&streams[i]));
-
-  // Removing static data
-  // cudaMemset(graph->d_inStatic, 0, *(graph->numVertices) * sizeof(bool));
-
-  uint32 *d_edges;
-  GPUAssert(cudaMalloc(&d_edges, graph->numEdges * sizeof(*d_edges)));
-
-  std::cout << "Starting Traversals" << std::endl;
-  for (int test = 0; test < nRuns; test++) {
-
-    graph->ResetFrontierNValues();
-
-#ifdef ZC
-    uint32 numBlocks =
-        (((*(graph->numVertices)) * WARP_SIZE + THREADS_PER_BLOCK) /
-         THREADS_PER_BLOCK);
-    dim3 gridDim(THREADS_PER_BLOCK,
-                 (numBlocks + THREADS_PER_BLOCK) / THREADS_PER_BLOCK);
-
-    CalculateCostNSplitFrontiers15<<<gridDim, blockDim, 0, streams[0]>>>(
-        graph->numVertices, graph->d_values, graph->d_frontier, graph->h_edges,
-        graph->d_offsets);
-#else
-
-    //   cudaMemcpyAsync(d_edges, graph->h_edges, graph->numEdges *
-    //   sizeof(*d_edges),
-    //                   cudaMemcpyHostToDevice, streams[0]);
-
-    //   uint32 numBlocks =
-    //       (((*(graph->numVertices)) * WARP_SIZE + THREADS_PER_BLOCK) /
-    //        THREADS_PER_BLOCK);
-    //   dim3 gridDim(THREADS_PER_BLOCK,
-    //                (numBlocks + THREADS_PER_BLOCK) / THREADS_PER_BLOCK);
-
-    //   CalculateCostNSplitFrontiers16<<<gridDim, blockDim, 0, streams[0]>>>(
-    //       graph->numVertices, graph->d_values, graph->d_frontier, d_edges,
-    //       graph->d_offsets);
-
-    uint32 *d_partitionList0;
-    uint32 *d_partitionList1;
-    uint32 *d_partitionList2;
-    uint32 *d_partitionList3;
-    uint32 *d_partitionList4;
-    uint32 *d_partitionList5;
-    uint32 *d_partitionList6;
-    uint32 *d_partitionList7;
-    uint32 *d_partitionList8;
-    uint32 *d_partitionList9;
-    uint32 *d_partitionList10;
-    uint32 *d_partitionList11;
-    uint32 *d_partitionList12;
-    uint32 *d_partitionList13;
-    uint32 *d_partitionList14;
-    uint32 *d_partitionList15;
-    GPUAssert(cudaMalloc(&d_partitionList0, sizeof(*d_partitionList0)));
-    GPUAssert(cudaMalloc(&d_partitionList1, sizeof(*d_partitionList0)));
-    GPUAssert(cudaMalloc(&d_partitionList2, sizeof(*d_partitionList0)));
-    GPUAssert(cudaMalloc(&d_partitionList3, sizeof(*d_partitionList0)));
-    GPUAssert(cudaMalloc(&d_partitionList4, sizeof(*d_partitionList0)));
-    GPUAssert(cudaMalloc(&d_partitionList5, sizeof(*d_partitionList0)));
-    GPUAssert(cudaMalloc(&d_partitionList6, sizeof(*d_partitionList0)));
-    GPUAssert(cudaMalloc(&d_partitionList7, sizeof(*d_partitionList0)));
-    GPUAssert(cudaMalloc(&d_partitionList8, sizeof(*d_partitionList0)));
-    GPUAssert(cudaMalloc(&d_partitionList9, sizeof(*d_partitionList0)));
-    GPUAssert(cudaMalloc(&d_partitionList10, sizeof(*d_partitionList0)));
-    GPUAssert(cudaMalloc(&d_partitionList11, sizeof(*d_partitionList0)));
-    GPUAssert(cudaMalloc(&d_partitionList12, sizeof(*d_partitionList0)));
-    GPUAssert(cudaMalloc(&d_partitionList13, sizeof(*d_partitionList0)));
-    GPUAssert(cudaMalloc(&d_partitionList14, sizeof(*d_partitionList0)));
-    GPUAssert(cudaMalloc(&d_partitionList15, sizeof(*d_partitionList0)));
-
-    uint32 *d_filterEdges0;
-    uint32 *d_filterEdges1;
-    uint32 *d_filterEdges2;
-    uint32 *d_filterEdges3;
-    uint32 *d_filterEdges4;
-    uint32 *d_filterEdges5;
-    uint32 *d_filterEdges6;
-    uint32 *d_filterEdges7;
-    uint32 *d_filterEdges8;
-    uint32 *d_filterEdges9;
-    uint32 *d_filterEdges10;
-    uint32 *d_filterEdges11;
-    uint32 *d_filterEdges12;
-    uint32 *d_filterEdges13;
-    uint32 *d_filterEdges14;
-    uint32 *d_filterEdges15;
-
-    GPUAssert(cudaMalloc(&d_filterEdges0,
-                         EDGES_IN_PARTITION * sizeof(*d_filterEdges0)));
-    GPUAssert(cudaMalloc(&d_filterEdges1,
-                         EDGES_IN_PARTITION * sizeof(*d_filterEdges1)));
-    GPUAssert(cudaMalloc(&d_filterEdges2,
-                         EDGES_IN_PARTITION * sizeof(*d_filterEdges2)));
-    GPUAssert(cudaMalloc(&d_filterEdges3,
-                         EDGES_IN_PARTITION * sizeof(*d_filterEdges3)));
-    GPUAssert(cudaMalloc(&d_filterEdges4,
-                         EDGES_IN_PARTITION * sizeof(*d_filterEdges4)));
-    GPUAssert(cudaMalloc(&d_filterEdges5,
-                         EDGES_IN_PARTITION * sizeof(*d_filterEdges5)));
-    GPUAssert(cudaMalloc(&d_filterEdges6,
-                         EDGES_IN_PARTITION * sizeof(*d_filterEdges6)));
-    GPUAssert(cudaMalloc(&d_filterEdges7,
-                         EDGES_IN_PARTITION * sizeof(*d_filterEdges7)));
-    GPUAssert(cudaMalloc(&d_filterEdges8,
-                         EDGES_IN_PARTITION * sizeof(*d_filterEdges8)));
-    GPUAssert(cudaMalloc(&d_filterEdges9,
-                         EDGES_IN_PARTITION * sizeof(*d_filterEdges9)));
-    GPUAssert(cudaMalloc(&d_filterEdges10,
-                         EDGES_IN_PARTITION * sizeof(*d_filterEdges10)));
-    GPUAssert(cudaMalloc(&d_filterEdges11,
-                         EDGES_IN_PARTITION * sizeof(*d_filterEdges11)));
-    GPUAssert(cudaMalloc(&d_filterEdges12,
-                         EDGES_IN_PARTITION * sizeof(*d_filterEdges12)));
-    GPUAssert(cudaMalloc(&d_filterEdges13,
-                         EDGES_IN_PARTITION * sizeof(*d_filterEdges13)));
-    GPUAssert(cudaMalloc(&d_filterEdges14,
-                         EDGES_IN_PARTITION * sizeof(*d_filterEdges14)));
-    GPUAssert(cudaMalloc(&d_filterEdges15,
-                         EDGES_IN_PARTITION * sizeof(*d_filterEdges15)));
-
-    for (uint32 partition = 0; partition < *graph->numPartitions; partition++) {
-
-      // Partition edge start
-      uint32 start = graph->h_offsets[graph->h_partitionsOffsets[partition]];
-      // Partition edge end
-      uint32 end = graph->h_offsets[graph->h_partitionsOffsets[partition + 1]];
-
-      uint32 partitionSize = end - start;
-
-      uint32 stream = partition % N_TARGET_FILTER_STREAMS;
-
-      graph->h_partitionList[stream] = partition;
-
-      switch (stream) {
-      case 0:
-        cudaMemcpyAsync(d_filterEdges0, graph->h_edges + start,
-                        partitionSize * sizeof(*graph->h_edges),
-                        cudaMemcpyHostToDevice, streams[stream]);
-
-        cudaMemcpyAsync(d_partitionList0, graph->h_partitionList + stream,
-                        sizeof(*graph->h_partitionList), cudaMemcpyHostToDevice,
-                        streams[stream]);
-        CalculateCostNSplitFrontiers11<<<staticGrid, blockDim, 0,
-                                         streams[stream]>>>(
-            d_partitionList0, graph->d_partitionsOffsets, graph->d_values,
-            graph->d_frontier, d_filterEdges0, graph->d_offsets);
-        break;
-      case 1:
-        cudaMemcpyAsync(d_filterEdges1, graph->h_edges + start,
-                        partitionSize * sizeof(*graph->h_edges),
-                        cudaMemcpyHostToDevice, streams[stream]);
-
-        cudaMemcpyAsync(d_partitionList1, graph->h_partitionList + stream,
-                        sizeof(*graph->h_partitionList), cudaMemcpyHostToDevice,
-                        streams[stream]);
-        CalculateCostNSplitFrontiers11<<<staticGrid, blockDim, 0,
-                                         streams[stream]>>>(
-            d_partitionList1, graph->d_partitionsOffsets, graph->d_values,
-            graph->d_frontier, d_filterEdges1, graph->d_offsets);
-        break;
-      case 2:
-        cudaMemcpyAsync(d_filterEdges2, graph->h_edges + start,
-                        partitionSize * sizeof(*graph->h_edges),
-                        cudaMemcpyHostToDevice, streams[stream]);
-
-        cudaMemcpyAsync(d_partitionList2, graph->h_partitionList + stream,
-                        sizeof(*graph->h_partitionList), cudaMemcpyHostToDevice,
-                        streams[stream]);
-        CalculateCostNSplitFrontiers11<<<staticGrid, blockDim, 0,
-                                         streams[stream]>>>(
-            d_partitionList2, graph->d_partitionsOffsets, graph->d_values,
-            graph->d_frontier, d_filterEdges2, graph->d_offsets);
-        break;
-      case 3:
-        cudaMemcpyAsync(d_filterEdges3, graph->h_edges + start,
-                        partitionSize * sizeof(*graph->h_edges),
-                        cudaMemcpyHostToDevice, streams[stream]);
-
-        cudaMemcpyAsync(d_partitionList3, graph->h_partitionList + stream,
-                        sizeof(*graph->h_partitionList), cudaMemcpyHostToDevice,
-                        streams[stream]);
-        CalculateCostNSplitFrontiers11<<<staticGrid, blockDim, 0,
-                                         streams[stream]>>>(
-            d_partitionList3, graph->d_partitionsOffsets, graph->d_values,
-            graph->d_frontier, d_filterEdges3, graph->d_offsets);
-        break;
-      case 4:
-        cudaMemcpyAsync(d_filterEdges4, graph->h_edges + start,
-                        partitionSize * sizeof(*graph->h_edges),
-                        cudaMemcpyHostToDevice, streams[stream]);
-
-        cudaMemcpyAsync(d_partitionList4, graph->h_partitionList + stream,
-                        sizeof(*graph->h_partitionList), cudaMemcpyHostToDevice,
-                        streams[stream]);
-        CalculateCostNSplitFrontiers11<<<staticGrid, blockDim, 0,
-                                         streams[stream]>>>(
-            d_partitionList4, graph->d_partitionsOffsets, graph->d_values,
-            graph->d_frontier, d_filterEdges4, graph->d_offsets);
-        break;
-      case 5:
-        cudaMemcpyAsync(d_filterEdges5, graph->h_edges + start,
-                        partitionSize * sizeof(*graph->h_edges),
-                        cudaMemcpyHostToDevice, streams[stream]);
-
-        cudaMemcpyAsync(d_partitionList5, graph->h_partitionList + stream,
-                        sizeof(*graph->h_partitionList), cudaMemcpyHostToDevice,
-                        streams[stream]);
-        CalculateCostNSplitFrontiers11<<<staticGrid, blockDim, 0,
-                                         streams[stream]>>>(
-            d_partitionList5, graph->d_partitionsOffsets, graph->d_values,
-            graph->d_frontier, d_filterEdges5, graph->d_offsets);
-        break;
-      case 6:
-        cudaMemcpyAsync(d_filterEdges6, graph->h_edges + start,
-                        partitionSize * sizeof(*graph->h_edges),
-                        cudaMemcpyHostToDevice, streams[stream]);
-
-        cudaMemcpyAsync(d_partitionList6, graph->h_partitionList + stream,
-                        sizeof(*graph->h_partitionList), cudaMemcpyHostToDevice,
-                        streams[stream]);
-        CalculateCostNSplitFrontiers11<<<staticGrid, blockDim, 0,
-                                         streams[stream]>>>(
-            d_partitionList6, graph->d_partitionsOffsets, graph->d_values,
-            graph->d_frontier, d_filterEdges6, graph->d_offsets);
-        break;
-      case 7:
-        cudaMemcpyAsync(d_filterEdges7, graph->h_edges + start,
-                        partitionSize * sizeof(*graph->h_edges),
-                        cudaMemcpyHostToDevice, streams[stream]);
-
-        cudaMemcpyAsync(d_partitionList7, graph->h_partitionList + stream,
-                        sizeof(*graph->h_partitionList), cudaMemcpyHostToDevice,
-                        streams[stream]);
-        CalculateCostNSplitFrontiers11<<<staticGrid, blockDim, 0,
-                                         streams[stream]>>>(
-            d_partitionList7, graph->d_partitionsOffsets, graph->d_values,
-            graph->d_frontier, d_filterEdges7, graph->d_offsets);
-        break;
-      case 8:
-        cudaMemcpyAsync(d_filterEdges8, graph->h_edges + start,
-                        partitionSize * sizeof(*graph->h_edges),
-                        cudaMemcpyHostToDevice, streams[stream]);
-
-        cudaMemcpyAsync(d_partitionList8, graph->h_partitionList + stream,
-                        sizeof(*graph->h_partitionList), cudaMemcpyHostToDevice,
-                        streams[stream]);
-        CalculateCostNSplitFrontiers11<<<staticGrid, blockDim, 0,
-                                         streams[stream]>>>(
-            d_partitionList8, graph->d_partitionsOffsets, graph->d_values,
-            graph->d_frontier, d_filterEdges8, graph->d_offsets);
-        break;
-      case 9:
-        cudaMemcpyAsync(d_filterEdges9, graph->h_edges + start,
-                        partitionSize * sizeof(*graph->h_edges),
-                        cudaMemcpyHostToDevice, streams[stream]);
-
-        cudaMemcpyAsync(d_partitionList9, graph->h_partitionList + stream,
-                        sizeof(*graph->h_partitionList), cudaMemcpyHostToDevice,
-                        streams[stream]);
-        CalculateCostNSplitFrontiers11<<<staticGrid, blockDim, 0,
-                                         streams[stream]>>>(
-            d_partitionList9, graph->d_partitionsOffsets, graph->d_values,
-            graph->d_frontier, d_filterEdges9, graph->d_offsets);
-        break;
-      case 10:
-        cudaMemcpyAsync(d_filterEdges10, graph->h_edges + start,
-                        partitionSize * sizeof(*graph->h_edges),
-                        cudaMemcpyHostToDevice, streams[stream]);
-
-        cudaMemcpyAsync(d_partitionList10, graph->h_partitionList + stream,
-                        sizeof(*graph->h_partitionList), cudaMemcpyHostToDevice,
-                        streams[stream]);
-        CalculateCostNSplitFrontiers11<<<staticGrid, blockDim, 0,
-                                         streams[stream]>>>(
-            d_partitionList10, graph->d_partitionsOffsets, graph->d_values,
-            graph->d_frontier, d_filterEdges10, graph->d_offsets);
-        break;
-      case 11:
-        cudaMemcpyAsync(d_filterEdges11, graph->h_edges + start,
-                        partitionSize * sizeof(*graph->h_edges),
-                        cudaMemcpyHostToDevice, streams[stream]);
-
-        cudaMemcpyAsync(d_partitionList11, graph->h_partitionList + stream,
-                        sizeof(*graph->h_partitionList), cudaMemcpyHostToDevice,
-                        streams[stream]);
-        CalculateCostNSplitFrontiers11<<<staticGrid, blockDim, 0,
-                                         streams[stream]>>>(
-            d_partitionList11, graph->d_partitionsOffsets, graph->d_values,
-            graph->d_frontier, d_filterEdges11, graph->d_offsets);
-        break;
-      case 12:
-        cudaMemcpyAsync(d_filterEdges12, graph->h_edges + start,
-                        partitionSize * sizeof(*graph->h_edges),
-                        cudaMemcpyHostToDevice, streams[stream]);
-
-        cudaMemcpyAsync(d_partitionList12, graph->h_partitionList + stream,
-                        sizeof(*graph->h_partitionList), cudaMemcpyHostToDevice,
-                        streams[stream]);
-        CalculateCostNSplitFrontiers11<<<staticGrid, blockDim, 0,
-                                         streams[stream]>>>(
-            d_partitionList12, graph->d_partitionsOffsets, graph->d_values,
-            graph->d_frontier, d_filterEdges12, graph->d_offsets);
-        break;
-      case 13:
-        cudaMemcpyAsync(d_filterEdges13, graph->h_edges + start,
-                        partitionSize * sizeof(*graph->h_edges),
-                        cudaMemcpyHostToDevice, streams[stream]);
-
-        cudaMemcpyAsync(d_partitionList13, graph->h_partitionList + stream,
-                        sizeof(*graph->h_partitionList), cudaMemcpyHostToDevice,
-                        streams[stream]);
-        CalculateCostNSplitFrontiers11<<<staticGrid, blockDim, 0,
-                                         streams[stream]>>>(
-            d_partitionList13, graph->d_partitionsOffsets, graph->d_values,
-            graph->d_frontier, d_filterEdges13, graph->d_offsets);
-        break;
-      case 14:
-        cudaMemcpyAsync(d_filterEdges14, graph->h_edges + start,
-                        partitionSize * sizeof(*graph->h_edges),
-                        cudaMemcpyHostToDevice, streams[stream]);
-
-        cudaMemcpyAsync(d_partitionList14, graph->h_partitionList + stream,
-                        sizeof(*graph->h_partitionList), cudaMemcpyHostToDevice,
-                        streams[stream]);
-        CalculateCostNSplitFrontiers11<<<staticGrid, blockDim, 0,
-                                         streams[stream]>>>(
-            d_partitionList14, graph->d_partitionsOffsets, graph->d_values,
-            graph->d_frontier, d_filterEdges14, graph->d_offsets);
-        break;
-      case 15:
-        cudaMemcpyAsync(d_filterEdges15, graph->h_edges + start,
-                        partitionSize * sizeof(*graph->h_edges),
-                        cudaMemcpyHostToDevice, streams[stream]);
-
-        cudaMemcpyAsync(d_partitionList15, graph->h_partitionList + stream,
-                        sizeof(*graph->h_partitionList), cudaMemcpyHostToDevice,
-                        streams[stream]);
-        CalculateCostNSplitFrontiers11<<<staticGrid, blockDim, 0,
-                                         streams[stream]>>>(
-            d_partitionList15, graph->d_partitionsOffsets, graph->d_values,
-            graph->d_frontier, d_filterEdges15, graph->d_offsets);
-        break;
-      }
-      // GPUAssert(cudaPeekAtLastError());
-
-      //    cudaMemcpyAsync(graph->d_partitionList + stream,
-      //                      graph->h_partitionList + stream,
-      //                      sizeof(*graph->h_partitionList),
-      //                      cudaMemcpyHostToDevice, streams[stream]);
-      //
-      // Touch the data afte using all 16 streams (256MB)
-      // if (stream == 15) {
-      //  uint32 numBlocks =
-      //      (((*(graph->numVertices)) * WARP_SIZE + THREADS_PER_BLOCK) /
-      //       THREADS_PER_BLOCK);
-      //  dim3 gridDim(THREADS_PER_BLOCK,
-      //               (numBlocks + THREADS_PER_BLOCK) / THREADS_PER_BLOCK);
-
-      //  CalculateCostNSplitFrontiers14<<<gridDim, blockDim, 0,
-      //                                   streams[stream]>>>(
-      //      graph->d_partitionList, graph->d_partitionsOffsets,
-      //      graph->d_values, graph->d_frontier, graph->d_filterEdges,
-      //      graph->d_offsets);
-
-      //  //  GPUAssert(cudaPeekAtLastError());
-      //}
-    }
-
-#endif
-  }
-  GPUAssert(cudaDeviceSynchronize());
-
-  return;
-}
-
-//      if (*graph->frontierSize > 200000) {
-//
-//        // cudaDeviceSynchronize();
-//        CalculateCostNSplitFrontiers<uint32>
-//            <<<staticGrid, blockDim, 0, partitionStream>>>(
-//                graph->numPartitions, graph->d_partitionsOffsets,
-//                graph->d_offsets, graph->d_zerocopyPartitionCost,
-//                graph->d_demandFrontier, graph->d_filterFrontier);
-//
-//        CalculateCostNSplitFrontiers2<uint32>
-//            <<<staticGrid, blockDim, 0, partitionStream>>>(
-//                graph->numPartitions, graph->d_partitionsOffsets,
-//                graph->d_offsets, graph->d_zerocopyPartitionCost,
-//                graph->d_demandFrontier, graph->d_filterFrontier);
-//
-//        CalculateCostNSplitFrontiers3<uint32>
-//            <<<staticGrid, blockDim, 0, partitionStream>>>(
-//                graph->numPartitions, graph->d_partitionsOffsets,
-//                graph->d_offsets, graph->d_zerocopyPartitionCost,
-//                graph->d_demandFrontier, graph->d_filterFrontier);
-//
-//        cudaMemcpyAsync(graph->h_partitionCost,
-//        graph->d_zerocopyPartitionCost,
-//                        *(graph->numPartitions) *
-//                            sizeof(*graph->h_partitionCost),
-//                        cudaMemcpyDeviceToHost, partitionStream);
-//
-//        cudaMemsetAsync(graph->d_zerocopyPartitionCost, 0,
-//                        *(graph->numPartitions) *
-//                            sizeof(*graph->h_partitionCost),
-//                        partitionStream);
-//
-//        cudaStreamSynchronize(partitionStream);
-//      }
+void CC64(std::string filePath, uint32 nRuns) { return; }

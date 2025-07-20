@@ -37,7 +37,9 @@ void SSSP32(std::string filePath, uint32 srcVertex, uint32 nRuns,
   // auto syncStaticPolicy = thrust::cuda::par.on(staticStream);
   // auto syncDemandPolicy = thrust::cuda::par.on(demandStream);
 
+  graph->SetFrontierToRatio(0.1f);
   uint64 totalNumFilterPartitions = 0;
+  float totalDuration = 0.0f;
   std::cout << "Starting Traversals" << std::endl;
   for (int test = 0; test < nRuns; test++) {
 
@@ -549,17 +551,18 @@ void SSSP32(std::string filePath, uint32 srcVertex, uint32 nRuns,
           graph->thrustFrontier, graph->thrustFrontier + *(graph->numVertices),
           0, thrust::plus<uint32>());
     }
+
+    totalDuration += timer.GetDuration();
   }
 
   const uint64 partitionSizeMB = PARTITION_SIZE_MB / (1024 * 1024); // 1024^2
 
   uint64 MBytes = totalNumFilterPartitions * partitionSizeMB * 2;
 
-  // uint64 GBytes = MBytes >> 10;
-  std::cout << "Total partitions in filter: " << totalNumFilterPartitions
+  std::cout << "Total amount of data sent with filter: " << MBytes << " MB"
             << std::endl;
 
-  std::cout << "Total amount of data sent with filter: " << MBytes << " MB"
+  std::cout << "Average execution time: " << totalDuration / nRuns << " ms"
             << std::endl;
 
   graph->DumpValues();

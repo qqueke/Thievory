@@ -1,10 +1,12 @@
+#include <numa.h>
+
+#include <iostream>
+
 #include "../src/bfs/bfs.cuh"
 #include "../src/cc/cc.cuh"
 #include "../src/pr/pr.cuh"
 #include "../src/sssp/sssp.cuh"
 #include "utils.hpp"
-#include <iostream>
-#include <numa.h>
 
 enum BYTES {
   _4BYTE = 4,
@@ -40,7 +42,6 @@ void usage(const char *program_name) {
 }
 
 int main(int argc, char **argv) {
-
   cudaFree(0);
 
   cudaDeviceProp deviceProperties;
@@ -49,9 +50,9 @@ int main(int argc, char **argv) {
   deviceProperties.major = 6;
   deviceProperties.minor = 0;
 
-  int device; // Selected device
+  int device;  // Selected device
   cudaChooseDevice(
-      &device, &deviceProperties); // Select the device that fits criteria best
+      &device, &deviceProperties);  // Select the device that fits criteria best
   cudaSetDevice(device);
   cudaSetDevice(0);
 
@@ -112,15 +113,7 @@ int main(int argc, char **argv) {
     exit(0);
   }
 
-  if (!hasInput)
-    exit(0);
-
-  // std::unordered_map<uint32, uint32> affinityMap = {
-  //     {0, 3}, // GPU0 -> NUMA Node 3
-  //     {1, 1}, // GPU1 -> NUMA Node 1
-  //     {2, 7}, // GPU2 -> NUMA Node 7
-  //     {3, 3}  // GPU3 -> NUMA Node 3
-  // };
+  if (!hasInput) exit(0);
 
   std::string topoOutput = runNvidiaSmiTopo();
 
@@ -157,7 +150,6 @@ int main(int argc, char **argv) {
             << "B and using " << nNGPUs << " neighbor GPUs" << std::endl;
 
   if (algorithm == "bfs") {
-
     std::cout << "Source vertex is: " << srcVertex << std::endl;
 
     if (edgeSize == _4BYTE)
@@ -172,7 +164,6 @@ int main(int argc, char **argv) {
     }
 
   } else if (algorithm == "cc") {
-
     if (edgeSize == _4BYTE)
       CC32(filePath, nRuns, nNGPUs, numaAffinities);
 
@@ -185,7 +176,6 @@ int main(int argc, char **argv) {
     }
 
   } else if (algorithm == "sssp") {
-
     std::cout << "Source vertex is: " << srcVertex << std::endl;
 
     if (edgeSize == _4BYTE)
@@ -200,10 +190,8 @@ int main(int argc, char **argv) {
     }
 
   } else if (algorithm == "pr") {
-
     if (edgeSize == _4BYTE) {
       if (type == "push") {
-
         std::cout << "Running PageRank Push Implementation" << std::endl;
         PR32_PUSH(filePath, nRuns, nNGPUs, numaAffinities);
       }

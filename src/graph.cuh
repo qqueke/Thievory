@@ -831,21 +831,21 @@ template <class EdgeType> void CSR<EdgeType>::DumpValues() {
   if (!file.is_open())
     return;
 
-  std::cout << "Results:" << std::endl;
+  // std::cout << "Results:" << std::endl;
   if (algorithm == PR) {
     for (EdgeType i = 0; i < *numVertices; ++i)
       file.write(reinterpret_cast<const char *>(&h_valuesPR[i]),
                  sizeof(*h_valuesPR));
-    for (uint32 i = 0; i < 31; ++i)
-      std::cout << "[" << i << "]= " << h_valuesPR[i] << std::endl;
+    // for (uint32 i = 0; i < 31; ++i)
+    //   std::cout << "[" << i << "]= " << h_valuesPR[i] << std::endl;
 
   } else {
     for (EdgeType i = 0; i < *numVertices; ++i)
       file.write(reinterpret_cast<const char *>(&h_values[i]),
                  sizeof(*h_values));
 
-    for (uint32 i = 0; i < 31; ++i)
-      std::cout << "[" << i << "]= " << h_values[i] << std::endl;
+    // for (uint32 i = 0; i < 31; ++i)
+    //   std::cout << "[" << i << "]= " << h_values[i] << std::endl;
   }
 
   file.close();

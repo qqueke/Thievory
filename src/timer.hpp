@@ -21,6 +21,12 @@ struct Timer {
     float ms = duration.count() * 1000.0f;
     std::cout << timerStr << ": " << ms << " ms" << std::endl;
   }
+
+  float GetDuration() {
+    end = std::chrono::high_resolution_clock::now();
+    duration = end - start;
+    return duration.count() * 1000.0f;
+  }
 };
 
 #endif
